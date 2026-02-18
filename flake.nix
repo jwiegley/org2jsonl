@@ -29,9 +29,15 @@
         # Using a function form for proper cross-compilation support.
         craneLib = (crane.mkLib pkgs).overrideToolchain (_: rustToolchain);
 
-        # Filter source to only include Rust-relevant files, improving
-        # cache hits by excluding irrelevant changes (e.g. README edits).
-        src = craneLib.cleanCargoSource ./.;
+        # Custom source filter: include Rust-relevant files (via crane's
+        # default filter) plus .org files needed by integration tests
+        # (they are embedded at compile time via include_str!).
+        orgFilter = path: _type: builtins.match ".*\\.org$" path != null;
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (orgFilter path type) || (craneLib.filterCargoSources path type);
+        };
 
         # Common arguments shared across all crane derivations to ensure
         # consistency between dependency builds, checks, and the final package.
