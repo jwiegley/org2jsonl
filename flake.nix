@@ -22,7 +22,7 @@
         # Use the stable Rust toolchain from rust-overlay with extensions
         # needed for development (rust-src for rust-analyzer, clippy, rustfmt).
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "clippy" "rustfmt" ];
+          extensions = [ "rust-src" "clippy" "rustfmt" "llvm-tools-preview" ];
         };
 
         # Override crane's default toolchain with our rust-overlay toolchain.
@@ -100,6 +100,7 @@
 
           packages = with pkgs; [
             rust-analyzer
+            cargo-llvm-cov
           ];
         };
       });
