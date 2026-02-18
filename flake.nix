@@ -42,7 +42,7 @@
           buildInputs = [ ]
             ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv
-              pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.apple-sdk_15
             ];
         };
 
