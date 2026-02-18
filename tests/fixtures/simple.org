@@ -1,0 +1,50 @@
+#+TITLE: Simple Test File
+#+AUTHOR: Test Author
+
+Some introductory text before the first heading.
+
+* TODO [#A] First Heading :work:urgent:
+SCHEDULED: <2024-01-15 Mon>
+
+This is the body of the first heading.
+
+** DONE Subheading One
+CLOSED: [2024-01-10 Wed 14:30]
+
+Some text in the subheading.
+
+- Item one
+- Item two
+- Item three
+
+** Subheading Two
+
+Another paragraph here.
+
+*** Deep Heading
+
+Deeply nested content.
+
+* Second Top-Level Heading
+
+#+begin_src python
+def hello():
+    print("Hello, world!")
+#+end_src
+
+Some text after the code block.
+
+| Name  | Age | City     |
+|-------+-----+----------|
+| Alice |  30 | New York |
+| Bob   |  25 | London   |
+
+* Third Heading :tag1:tag2:
+:PROPERTIES:
+:CUSTOM_ID: third
+:CATEGORY: test
+:END:
+
+A paragraph with *bold*, /italic/, _underline_, +strikethrough+, ~code~, and =verbatim= text.
+
+Also a [[https://example.com][link to example]] and a plain link https://example.org.

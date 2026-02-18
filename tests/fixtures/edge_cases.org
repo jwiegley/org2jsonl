@@ -1,0 +1,122 @@
+* Empty heading
+
+* Heading with only properties
+:PROPERTIES:
+:ID: abc123
+:END:
+
+* Heading with planning and properties
+DEADLINE: <2024-06-01 Sat> SCHEDULED: <2024-05-15 Wed>
+:PROPERTIES:
+:EFFORT: 2:00
+:END:
+
+Body text after properties.
+
+* TODO Checkbox lists
+
+- [X] Done item
+- [ ] Undone item
+- [-] Partial item
+  - [X] Sub done
+  - [ ] Sub undone
+
+* Ordered list
+
+1. First
+2. Second
+3. Third
+
+* Descriptive list
+
+- Term One :: Description of term one
+- Term Two :: Description of term two
+
+* Nested blocks
+
+#+begin_quote
+This is a quote block.
+
+With multiple paragraphs.
+#+end_quote
+
+#+begin_center
+Centered text.
+#+end_center
+
+* Source blocks with parameters
+
+#+begin_src emacs-lisp :results value
+(+ 1 2 3)
+#+end_src
+
+#+begin_src shell :dir /tmp
+ls -la
+#+end_src
+
+* Example and export blocks
+
+#+begin_example
+This is example text.
+  It preserves indentation.
+#+end_example
+
+#+begin_export html
+<div class="custom">HTML content</div>
+#+end_export
+
+* Comments and fixed width
+
+# This is a comment line.
+# Another comment.
+
+: This is fixed width text.
+: It also preserves formatting.
+
+* Horizontal rule
+
+-----
+
+Text after the rule.
+
+* Timestamps
+
+Active: <2024-03-15 Fri 10:00>
+Inactive: [2024-03-15 Fri 10:00]
+Range: <2024-03-15 Fri>--<2024-03-20 Wed>
+Repeater: <2024-03-15 Fri +1w>
+
+* Footnotes
+
+This has a footnote[fn:1] and an inline one[fn:: inline definition].
+
+[fn:1] This is the footnote definition.
+
+* LaTeX
+
+The equation $E = mc^2$ is famous.
+
+\begin{equation}
+F = ma
+\end{equation}
+
+* Special characters
+
+Entities: \alpha \beta \gamma \Gamma
+
+* Inline code and verbatim edge cases
+
+Here is ~code with spaces~ and =verbatim with spaces=.
+
+* COMMENT Commented heading
+
+This entire subtree should be treated as a comment.
+
+* Statistics cookies
+
+** Progress [2/3]
+- [X] Done
+- [X] Done
+- [ ] Not done
+
+** Percentage [66%]

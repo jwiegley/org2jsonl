@@ -1,0 +1,3 @@
+* Single heading
+
+Just one heading with a paragraph.

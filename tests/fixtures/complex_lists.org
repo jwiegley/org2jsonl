@@ -1,0 +1,52 @@
+* Nested unordered lists
+
+- Top level item 1
+  - Nested item 1a
+  - Nested item 1b
+    - Deep nested 1b-i
+    - Deep nested 1b-ii
+  - Nested item 1c
+- Top level item 2
+- Top level item 3
+  - Nested item 3a
+
+* Mixed list types
+
+1. Ordered first
+2. Ordered second
+   - Unordered nested
+   - Another unordered
+     1. Back to ordered
+     2. More ordered
+3. Ordered third
+
+* Lists with paragraphs
+
+- First item
+
+  This is a continuation paragraph for the first item.
+
+  And another paragraph.
+
+- Second item
+
+  Continuation for second.
+
+* Descriptive list
+
+- Emacs :: An extensible, customizable text editor
+- Vim :: A highly configurable text editor
+- VS Code :: A source-code editor made by Microsoft
+
+* Checkboxes with nesting
+
+- [ ] Project Alpha
+  - [X] Design phase
+  - [X] Implementation
+  - [ ] Testing
+    - [X] Unit tests
+    - [ ] Integration tests
+    - [ ] Performance tests
+  - [ ] Deployment
+- [X] Project Beta
+  - [X] All phases complete

@@ -1,0 +1,27 @@
+* Level 1
+** Level 2
+*** Level 3
+**** Level 4
+***** Level 5
+
+Deep content here.
+
+***** Another level 5
+
+More deep content.
+
+**** Back to level 4
+
+Content at level 4.
+
+*** Back to level 3
+
+Content at level 3.
+
+** Another level 2
+
+Content.
+
+* Another level 1
+
+Top level again.

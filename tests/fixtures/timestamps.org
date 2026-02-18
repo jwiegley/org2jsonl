@@ -1,0 +1,21 @@
+* Active timestamps
+
+Meeting at <2024-03-15 Fri 10:00>.
+
+Range: <2024-03-15 Fri 10:00>--<2024-03-15 Fri 11:00>
+
+* Inactive timestamps
+
+Created on [2024-01-01 Mon].
+
+* Repeated tasks
+
+** TODO Daily review
+SCHEDULED: <2024-03-15 Fri +1d>
+
+** TODO Weekly report
+DEADLINE: <2024-03-22 Fri +1w>
+
+* Diary timestamps
+
+<%%(diary-anniversary 6 14 1990)>

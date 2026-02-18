@@ -1,0 +1,28 @@
+* Simple table
+
+| Col1 | Col2 | Col3 |
+|------+------+------|
+| a    | b    | c    |
+| d    | e    | f    |
+
+* Table without header rule
+
+| a | b | c |
+| d | e | f |
+| g | h | i |
+
+* Table with formulas
+
+| Item  | Price | Qty | Total |
+|-------+-------+-----+-------|
+| Apple |  1.50 |   3 |  4.50 |
+| Bread |  2.00 |   1 |  2.00 |
+|-------+-------+-----+-------|
+| Total |       |     |  6.50 |
+
+* Wide table
+
+| Name            | Email                 | Phone        | Address             | City     | State | Zip   |
+|-----------------+-----------------------+--------------+---------------------+----------+-------+-------|
+| John Doe        | john@example.com      | 555-0100     | 123 Main St         | Anytown  | CA    | 90210 |
+| Jane Smith      | jane@example.com      | 555-0200     | 456 Oak Ave         | Othertown | NY   | 10001 |

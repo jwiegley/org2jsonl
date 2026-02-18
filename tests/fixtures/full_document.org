@@ -1,0 +1,98 @@
+#+TITLE: Complete Test Document
+#+AUTHOR: Test Author
+#+DATE: 2024-01-15
+#+OPTIONS: toc:t num:t
+
+Preamble paragraph with *bold*, /italic/, ~code~, and a [[https://example.com][link]].
+
+* TODO [#A] Project Planning :work:planning:
+SCHEDULED: <2024-03-01 Fri> DEADLINE: <2024-03-15 Fri>
+:PROPERTIES:
+:ID: proj-001
+:CATEGORY: projects
+:EFFORT: 4:00
+:END:
+
+This is the main project planning heading. It contains various elements.
+
+** DONE Design Phase :design:
+CLOSED: [2024-02-15 Thu 16:00]
+:PROPERTIES:
+:ID: design-001
+:END:
+
+Design is complete. See the following documents:
+
+- [[file:design.org][Design Document]]
+- [[file:architecture.org][Architecture Overview]]
+
+*** Design Review Notes
+
+Notes from the review meeting:
+
+1. API design approved
+2. Schema versioning confirmed
+3. Round-trip property validated
+
+#+begin_src python :results output
+def validate_schema(data):
+    """Validate the JSON schema."""
+    assert "schema_version" in data
+    return True
+#+end_src
+
+** TODO Implementation Phase :code:
+:PROPERTIES:
+:ID: impl-001
+:END:
+
+Implementation tasks:
+
+- [X] Core parser
+- [X] JSON serialization
+- [ ] Canonical writer
+  - [X] Headings
+  - [ ] Tables
+  - [ ] Lists
+- [ ] CLI interface
+
+*** Code Samples
+
+#+begin_src rust
+fn main() {
+    println!("Hello, org2jsonl!");
+}
+#+end_src
+
+#+begin_example
+$ org2jsonl input.org | jq '.type'
+"heading"
+#+end_example
+
+*** Performance Notes
+
+| Operation     | Time (ms) | Memory (MB) |
+|---------------+-----------+-------------|
+| Parse 1KB     |       0.5 |         2.0 |
+| Parse 100KB   |      15.0 |        20.0 |
+| Parse 1MB     |     150.0 |       180.0 |
+
+* References :reference:
+
+Some useful links:
+
+- Org-mode manual: [[https://orgmode.org/manual/][Official Manual]]
+- Orgize crate: [[https://crates.io/crates/orgize][crates.io]]
+
+#+begin_quote
+The best way to predict the future is to invent it.
+-- Alan Kay
+#+end_quote
+
+-----
+
+Footnotes:
+
+[fn:1] This is a footnote definition.
+
+[fn:2] Another footnote with *markup*.

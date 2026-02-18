@@ -1,0 +1,14 @@
+#+TITLE: Document Without Headings
+
+This document has no headings at all.
+
+Just paragraphs and other elements.
+
+- A list item
+- Another item
+
+#+begin_src rust
+fn main() {
+    println!("Hello!");
+}
+#+end_src

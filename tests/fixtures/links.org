@@ -1,0 +1,26 @@
+* Various link types
+
+Regular link: [[https://example.com][Example]]
+
+Link without description: [[https://example.com]]
+
+File link: [[file:./other.org][Other file]]
+
+Internal link: [[*Some Heading][heading link]]
+
+Custom ID link: [[#my-id][by custom id]]
+
+Fuzzy link: [[Some target]]
+
+Image link: [[file:image.png]]
+
+* Some Heading
+:PROPERTIES:
+:CUSTOM_ID: my-id
+:END:
+
+This is the target heading.
+
+<<Some target>>
+
+This paragraph has a radio target.

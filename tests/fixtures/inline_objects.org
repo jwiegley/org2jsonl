@@ -1,0 +1,30 @@
+* All inline objects
+
+Regular text with *bold*, /italic/, _underline_, +strikethrough+, ~code~, and =verbatim=.
+
+Nested: *bold with /italic inside/ it*
+
+Links: [[https://example.com][described]] and [[https://example.com]]
+
+Footnote reference[fn:1] and inline footnote[fn:: inline definition here].
+
+LaTeX: \alpha and $E = mc^2$ and \( x^2 + y^2 = z^2 \)
+
+Entity: \alpha{} \beta{} \rightarrow{}
+
+Timestamp: <2024-03-15 Fri> and [2024-01-01 Mon]
+
+Statistics: [2/5] and [40%]
+
+Target: <<my-target>> and radio <<<radio target>>>.
+
+Export snippet: @@html:<b>bold</b>@@ and inline src_python{print("hello")}.
+
+Macro: {{{title}}} and {{{date(format)}}}.
+
+Subscript: H_{2}O and superscript: E = mc^{2}.
+
+Line break: before\\
+after.
+
+[fn:1] The footnote definition.

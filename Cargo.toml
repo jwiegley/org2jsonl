@@ -1,0 +1,27 @@
+[package]
+name = "org2jsonl"
+version = "0.1.0"
+edition = "2021"
+description = "Convert Emacs Org-mode files to/from JSONL for manipulation with standard JSON tools"
+license = "MIT"
+authors = ["John Wiegley <johnw@newartisans.com>"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+orgize = "0.10.0-alpha.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[dev-dependencies]
+proptest = "1"
+pretty_assertions = "1"
+tempfile = "3"
+
+[[bin]]
+name = "org2jsonl"
+path = "src/bin/org2jsonl.rs"
+
+[[bin]]
+name = "jsonl2org"
+path = "src/bin/jsonl2org.rs"
