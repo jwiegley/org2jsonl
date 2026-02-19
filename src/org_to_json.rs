@@ -437,6 +437,26 @@ fn convert_section_elements(section: &Section) -> (Vec<Element>, Vec<bool>) {
         // Also check for trailing BLANK_LINE tokens in previous real element
         // (orgize sometimes folds blank lines into the preceding paragraph)
 
+        // Before processing the element, check if it has affiliated keywords as children
+        for sub_child in child.children() {
+            if sub_child.kind() == SyntaxKind::AFFILIATED_KEYWORD {
+                if let Some(ak) = orgize::ast::AffiliatedKeyword::cast(sub_child) {
+                    let ak_elem = Element::AffiliatedKeyword {
+                        key: ak.key().to_string(),
+                        value: ak
+                            .value()
+                            .map(|v| v.to_string().trim_end().to_string())
+                            .unwrap_or_default(),
+                    };
+                    if !elements.is_empty() {
+                        spacing.push(saw_blank);
+                    }
+                    elements.push(ak_elem);
+                    saw_blank = false;
+                }
+            }
+        }
+
         if let Some(el) = convert_block_element(&child) {
             // Filter out empty paragraphs (these arise from blank lines
             // between a heading and its children, and are not meaningful).
@@ -559,7 +579,10 @@ fn convert_block_element(node: &orgize::SyntaxNode) -> Option<Element> {
 
     // Horizontal rule
     if Rule::cast(node.clone()).is_some() {
-        return Some(Element::HorizontalRule);
+        let raw = node.to_string();
+        let trimmed = raw.trim();
+        let dash_count = if trimmed.len() != 5 { Some(trimmed.len()) } else { None };
+        return Some(Element::HorizontalRule { dash_count });
     }
 
     // Keyword — preserve the original spacing after the colon
@@ -739,7 +762,9 @@ fn convert_list_item(item: &OrgListItem, is_descriptive: bool) -> ListItem {
 
     // List item content lives in a LIST_ITEM_CONTENT child node, or
     // directly in the item's children after the bullet/checkbox/tag.
-    let (mut contents, content_spacing) = convert_list_item_contents(item);
+    // Compute body_indent from the bullet string
+    let body_indent = bullet.trim_end().len() + 1;
+    let (mut contents, content_spacing) = convert_list_item_contents(item, body_indent);
 
     // When the list is NOT descriptive but orgize parsed a tag (because the
     // text contained `::`, e.g. `std::vector`), inline the tag back into
@@ -811,7 +836,7 @@ fn count_trailing_blank_lines(node: &orgize::SyntaxNode) -> u32 {
 ///
 /// Returns the elements and a per-element Vec of blank-line counts
 /// (how many blank lines follow each element in the source).
-fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, Vec<u32>) {
+fn convert_list_item_contents(item: &OrgListItem, body_indent: usize) -> (Vec<Element>, Vec<u32>) {
     let mut elements = Vec::new();
     let mut spacing = Vec::new();
     for child in item.syntax().children() {
@@ -830,7 +855,7 @@ fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, Vec<u32>) {
             let grandchildren: Vec<_> = child.children().collect();
             for (gi, grandchild) in grandchildren.iter().enumerate() {
                 if let Some(el) = convert_block_element(grandchild) {
-                    elements.push(strip_list_item_indentation(el));
+                    elements.push(strip_list_item_indentation(el, body_indent));
                     // Count trailing blank lines (blank lines between this
                     // element and the next). For the last element, use 0.
                     let mut blank_count = if gi + 1 < grandchildren.len() {
@@ -851,7 +876,7 @@ fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, Vec<u32>) {
             continue;
         }
         if let Some(el) = convert_block_element(&child) {
-            elements.push(strip_list_item_indentation(el));
+            elements.push(strip_list_item_indentation(el, body_indent));
             spacing.push(0);
         }
     }
@@ -863,10 +888,10 @@ fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, Vec<u32>) {
 /// Org-mode indents continuation paragraphs under list items, but we
 /// handle indentation in the writer. Keeping the source indentation
 /// causes it to compound on each round-trip.
-fn strip_list_item_indentation(el: Element) -> Element {
+fn strip_list_item_indentation(el: Element, body_indent: usize) -> Element {
     match el {
         Element::Paragraph { contents } => {
-            let contents = strip_leading_whitespace(contents);
+            let contents = strip_leading_whitespace(contents, body_indent);
             Element::Paragraph { contents }
         }
         Element::SrcBlock {
@@ -876,13 +901,13 @@ fn strip_list_item_indentation(el: Element) -> Element {
         } => Element::SrcBlock {
             language,
             parameters,
-            value: dedent_block_value(&value),
+            value: dedent_block_value(&value, body_indent),
         },
         Element::ExampleBlock { value } => Element::ExampleBlock {
-            value: dedent_block_value(&value),
+            value: dedent_block_value(&value, body_indent),
         },
         Element::FixedWidth { value } => Element::FixedWidth {
-            value: dedent_block_value(&value),
+            value: dedent_block_value(&value, body_indent),
         },
         other => other,
     }
@@ -890,7 +915,7 @@ fn strip_list_item_indentation(el: Element) -> Element {
 
 /// Strip leading whitespace from the first Text element in a list of
 /// inline content, and from Text elements that follow LineBreak elements.
-fn strip_leading_whitespace(mut contents: Vec<InlineContent>) -> Vec<InlineContent> {
+fn strip_leading_whitespace(mut contents: Vec<InlineContent>, body_indent: usize) -> Vec<InlineContent> {
     // Strip leading whitespace from first element
     if let Some(InlineContent::Text { value }) = contents.first_mut() {
         *value = value.trim_start().to_string();
@@ -920,28 +945,17 @@ fn strip_leading_whitespace(mut contents: Vec<InlineContent>) -> Vec<InlineConte
     // Also dedent multi-line text elements
     for item in &mut contents {
         if let InlineContent::Text { value } = item {
-            *value = dedent_text(value);
+            *value = dedent_text(value, body_indent);
         }
     }
     contents
 }
 
-/// Dedent all lines in a block value (e.g., src block content) by removing
-/// the minimum common leading whitespace.  orgize preserves source indentation
-/// inside list items; this normalization prevents indentation doubling.
-fn dedent_block_value(text: &str) -> String {
+/// Dedent all lines in a block value by stripping up to `amount` whitespace
+/// characters from each line. orgize preserves source indentation inside list
+/// items; this normalization prevents indentation doubling.
+fn dedent_block_value(text: &str, amount: usize) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
-    let min_indent = lines
-        .iter()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-
-    if min_indent == 0 {
-        return text.to_string();
-    }
-
     lines
         .iter()
         .enumerate()
@@ -953,32 +967,22 @@ fn dedent_block_value(text: &str) -> String {
                 } else {
                     ""
                 }
-            } else if line.len() >= min_indent {
-                &line[min_indent..]
             } else {
-                line.trim_start()
+                // Strip up to `amount` leading whitespace characters
+                let leading_ws = line.len() - line.trim_start().len();
+                let strip = leading_ws.min(amount);
+                &line[strip..]
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// Dedent continuation lines in multi-line text.
-fn dedent_text(text: &str) -> String {
+/// Dedent continuation lines in multi-line text by stripping up to `amount`
+/// whitespace characters from continuation lines (lines after the first).
+fn dedent_text(text: &str, amount: usize) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     if lines.len() <= 1 {
-        return text.to_string();
-    }
-
-    // Find minimum indentation of non-empty continuation lines (excluding first line)
-    let min_indent = lines[1..]
-        .iter()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-
-    if min_indent == 0 {
         return text.to_string();
     }
 
@@ -988,13 +992,15 @@ fn dedent_text(text: &str) -> String {
             result.push('\n');
         }
         if i == 0 {
+            // Keep first line as-is
             result.push_str(line);
         } else if line.trim().is_empty() {
             // Keep empty lines as-is (already added just '\n')
-        } else if line.len() >= min_indent {
-            result.push_str(&line[min_indent..]);
         } else {
-            result.push_str(line);
+            // Strip up to `amount` leading whitespace characters
+            let leading_ws = line.len() - line.trim_start().len();
+            let strip = leading_ws.min(amount);
+            result.push_str(&line[strip..]);
         }
     }
     result
@@ -2107,7 +2113,7 @@ mod tests {
             EntryContent::Section { elements, .. } => {
                 let rule = elements
                     .iter()
-                    .find(|e| matches!(e, Element::HorizontalRule));
+                    .find(|e| matches!(e, Element::HorizontalRule { .. }));
                 assert!(rule.is_some(), "expected HorizontalRule in {:?}", elements);
             }
             _ => panic!("expected Section"),
@@ -2127,6 +2133,36 @@ mod tests {
                 other => panic!("expected PlainList, got {:?}", other),
             },
             _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn affiliated_keyword_ast_structure() {
+        let input = "#+RESULTS: test\n: some result\n";
+        let org = orgize::Org::parse(input);
+        let doc = org.document();
+        if let Some(section) = doc.section() {
+            for child in section.syntax().children() {
+                eprintln!("Section child: {:?}", child.kind());
+                for sub in child.children() {
+                    eprintln!("  Sub child: {:?}", sub.kind());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn comma_escaping_behavior() {
+        let input = "#+begin_example\n,* Not a heading\n,#+not a keyword\n#+end_example\n";
+        let org = orgize::Org::parse(input);
+        let entries = org_to_entries(input);
+        if let Some(entry) = entries.first() {
+            if let EntryContent::Section { elements, .. } = &entry.content {
+                if let Some(Element::ExampleBlock { value }) = elements.first() {
+                    eprintln!("Example block value: {:?}", value);
+                    // Check if commas are stripped or preserved
+                }
+            }
         }
     }
 }

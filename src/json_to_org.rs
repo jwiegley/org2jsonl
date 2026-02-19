@@ -218,6 +218,10 @@ fn is_light_element(elem: &Element) -> bool {
 
 /// Determine if a blank line is needed between two consecutive elements.
 fn needs_blank_line_between(prev: &Element, next: &Element) -> bool {
+    // No blank line after affiliated keyword
+    if matches!(prev, Element::AffiliatedKeyword { .. }) {
+        return false;
+    }
     // No blank line between consecutive light elements
     if is_light_element(prev) && is_light_element(next) {
         return false;
@@ -373,16 +377,20 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
             buf.push(':');
             buf.push_str(name);
             buf.push_str(":\n");
-            write_block_value(buf, value, &prefix);
+            write_block_value_raw(buf, value, &prefix);
             buf.push_str(&prefix);
             buf.push_str(":END:\n");
         }
         Element::Table { rows } => {
             write_table(buf, rows, &prefix);
         }
-        Element::HorizontalRule => {
+        Element::HorizontalRule { dash_count } => {
             buf.push_str(&prefix);
-            buf.push_str("-----\n");
+            let count = dash_count.unwrap_or(5);
+            for _ in 0..count {
+                buf.push('-');
+            }
+            buf.push('\n');
         }
         Element::Keyword { key, value } => {
             buf.push_str(&prefix);
@@ -395,8 +403,12 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
         Element::Comment { value } => {
             for line in value.lines() {
                 buf.push_str(&prefix);
-                buf.push_str("# ");
-                buf.push_str(line);
+                if line.is_empty() {
+                    buf.push_str("#");
+                } else {
+                    buf.push_str("# ");
+                    buf.push_str(line);
+                }
                 buf.push('\n');
             }
             // Handle the case where value is empty
@@ -519,17 +531,31 @@ fn write_paragraph(buf: &mut String, contents: &[InlineContent], prefix: &str) {
 /// The value is already the raw text inside the block.  Each line is prefixed
 /// with the given indentation.  If the value does not end with a newline we
 /// add one so that the closing `#+end_*` lands on its own line.
+///
+/// When `comma_escape` is true, lines starting with `*` or `#+` are
+/// comma-escaped (orgize strips leading commas when parsing these block
+/// types, so we add them back on writing).  Comma escaping applies to
+/// src, example, verse, export, and comment blocks — NOT drawers.
 fn write_block_value(buf: &mut String, value: &str, prefix: &str) {
+    write_block_value_inner(buf, value, prefix, true);
+}
+
+fn write_block_value_raw(buf: &mut String, value: &str, prefix: &str) {
+    write_block_value_inner(buf, value, prefix, false);
+}
+
+fn write_block_value_inner(buf: &mut String, value: &str, prefix: &str, comma_escape: bool) {
     if value.is_empty() {
         return;
     }
     for line in value.lines() {
         buf.push_str(prefix);
+        if comma_escape && (line.starts_with('*') || line.starts_with("#+")) {
+            buf.push(',');
+        }
         buf.push_str(line);
         buf.push('\n');
     }
-    // If the original value ended with a trailing newline, `lines()` will
-    // have consumed it already (no extra empty element), so no double newline.
 }
 
 /// Write an element but indent every output line by `indent` spaces.
@@ -679,16 +705,18 @@ fn write_list_item_first_element(buf: &mut String, element: &Element, body_inden
                 buf.push_str(first.trim_end());
                 buf.push('\n');
 
-                // Remaining lines: strip ALL original indentation (orgize may
-                // preserve source indentation inconsistently across inline
-                // element boundaries), then add the canonical body_indent.
+                // Remaining lines: the parser already stripped exactly
+                // body_indent characters of leading whitespace, so any
+                // remaining leading whitespace is intentional (extra
+                // indentation beyond the standard body indent).  Just
+                // prepend body_indent spaces and preserve the rest.
                 let indent_str = " ".repeat(body_indent);
                 for line in rest {
                     if line.trim().is_empty() {
                         buf.push('\n');
                     } else {
                         buf.push_str(&indent_str);
-                        buf.push_str(line.trim_start().trim_end());
+                        buf.push_str(line.trim_end());
                         buf.push('\n');
                     }
                 }
@@ -729,38 +757,23 @@ fn write_list_continuation_element(buf: &mut String, element: &Element, body_ind
                     buf.push('\n');
                 } else {
                     buf.push_str(&indent_str);
-                    buf.push_str(line.trim_start().trim_end());
+                    buf.push_str(line.trim_end());
                     buf.push('\n');
                 }
             }
         }
         _ => {
-            // Render with indent=0 to get the raw output with only orgize's
-            // preserved source indentation.
+            // Render with indent=0 to get the raw output.
+            // The parser has already stripped body_indent, so we just need to add it back.
             let mut tmp = String::new();
             write_element(&mut tmp, element, 0);
-
-            // Find the minimum non-zero leading whitespace across non-empty lines.
-            let min_indent = tmp
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.len() - l.trim_start().len())
-                .min()
-                .unwrap_or(0);
-
-            // Re-indent each line: strip the common source indent, add body_indent.
             let indent_str = " ".repeat(body_indent);
             for line in tmp.lines() {
-                if line.trim().is_empty() {
+                if line.is_empty() {
                     buf.push('\n');
                 } else {
-                    let stripped = if line.len() > min_indent {
-                        &line[min_indent..]
-                    } else {
-                        line.trim_start()
-                    };
                     buf.push_str(&indent_str);
-                    buf.push_str(stripped);
+                    buf.push_str(line);
                     buf.push('\n');
                 }
             }
@@ -772,8 +785,49 @@ fn write_list_continuation_element(buf: &mut String, element: &Element, body_ind
 // Tables
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, PartialEq)]
+enum ColumnAlignment {
+    Left,
+    Right,
+    Center,
+}
+
+/// Detect column alignments from alignment-cookie rows.
+fn detect_column_alignments(rows: &[TableRow]) -> Vec<ColumnAlignment> {
+    let mut alignments: Vec<ColumnAlignment> = Vec::new();
+    for row in rows {
+        if let TableRowKind::Standard { cells } = &row.kind {
+            // Check if this is an alignment-cookie row: all non-empty cells match <r>, <l>, or <c>
+            let is_alignment_row = !cells.is_empty() && cells.iter().all(|cell| {
+                let text = inline_to_string(cell).trim().to_string();
+                text.is_empty() || text == "<r>" || text == "<l>" || text == "<c>"
+            });
+            if is_alignment_row {
+                // Expand alignments vector if needed
+                while alignments.len() < cells.len() {
+                    alignments.push(ColumnAlignment::Left);
+                }
+                for (i, cell) in cells.iter().enumerate() {
+                    let text = inline_to_string(cell).trim().to_string();
+                    if text == "<r>" {
+                        alignments[i] = ColumnAlignment::Right;
+                    } else if text == "<c>" {
+                        alignments[i] = ColumnAlignment::Center;
+                    } else if text == "<l>" {
+                        alignments[i] = ColumnAlignment::Left;
+                    }
+                }
+            }
+        }
+    }
+    alignments
+}
+
 /// Render an Org table.
 fn write_table(buf: &mut String, rows: &[TableRow], prefix: &str) {
+    // Detect column alignments from alignment-cookie rows
+    let alignments = detect_column_alignments(rows);
+
     // Track the most recent standard row's cell widths for rule rows
     // (rule rows use the widths from the preceding/following standard row).
     let mut last_standard_widths: Vec<usize> = Vec::new();
@@ -802,11 +856,36 @@ fn write_table(buf: &mut String, rows: &[TableRow], prefix: &str) {
                         .map(|c| inline_to_string(c))
                         .unwrap_or_default();
                     let width = current_widths.get(i).copied().unwrap_or(text.len());
+                    let alignment = alignments.get(i).copied().unwrap_or(ColumnAlignment::Left);
+
                     buf.push(' ');
-                    buf.push_str(&text);
-                    let padding = width.saturating_sub(text.len());
-                    for _ in 0..padding {
-                        buf.push(' ');
+                    match alignment {
+                        ColumnAlignment::Left => {
+                            buf.push_str(&text);
+                            let padding = width.saturating_sub(text.len());
+                            for _ in 0..padding {
+                                buf.push(' ');
+                            }
+                        }
+                        ColumnAlignment::Right => {
+                            let padding = width.saturating_sub(text.len());
+                            for _ in 0..padding {
+                                buf.push(' ');
+                            }
+                            buf.push_str(&text);
+                        }
+                        ColumnAlignment::Center => {
+                            let total_padding = width.saturating_sub(text.len());
+                            let left_pad = total_padding / 2;
+                            let right_pad = total_padding - left_pad;
+                            for _ in 0..left_pad {
+                                buf.push(' ');
+                            }
+                            buf.push_str(&text);
+                            for _ in 0..right_pad {
+                                buf.push(' ');
+                            }
+                        }
                     }
                     buf.push_str(" |");
                 }
@@ -1324,7 +1403,7 @@ fn main() {}
 
     #[test]
     fn horizontal_rule() {
-        let elem = Element::HorizontalRule;
+        let elem = Element::HorizontalRule { dash_count: None };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
             body_spacing: vec![],
