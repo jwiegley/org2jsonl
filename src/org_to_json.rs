@@ -539,11 +539,13 @@ fn convert_block_element(node: &orgize::SyntaxNode) -> Option<Element> {
         return Some(Element::HorizontalRule);
     }
 
-    // Keyword
+    // Keyword — preserve the original spacing after the colon
+    // (orgize's value() includes leading whitespace, e.g., "  en" for
+    // "#+LANGUAGE:  en").
     if let Some(kw) = Keyword::cast(node.clone()) {
         return Some(Element::Keyword {
             key: kw.key().to_string(),
-            value: kw.value().to_string().trim().to_string(),
+            value: kw.value().to_string().trim_end().to_string(),
         });
     }
 
@@ -585,7 +587,10 @@ fn convert_block_element(node: &orgize::SyntaxNode) -> Option<Element> {
     if let Some(ak) = orgize::ast::AffiliatedKeyword::cast(node.clone()) {
         return Some(Element::AffiliatedKeyword {
             key: ak.key().to_string(),
-            value: ak.value().map(|v| v.to_string()).unwrap_or_default(),
+            value: ak
+                .value()
+                .map(|v| v.to_string().trim_end().to_string())
+                .unwrap_or_default(),
         });
     }
 
@@ -760,15 +765,20 @@ fn convert_list_item(item: &OrgListItem, is_descriptive: bool) -> ListItem {
 /// Count trailing BLANK_LINE tokens inside a syntax node (typically a paragraph).
 fn count_trailing_blank_lines(node: &orgize::SyntaxNode) -> u32 {
     let mut count = 0u32;
-    for tok in node.children_with_tokens().collect::<Vec<_>>().into_iter().rev() {
-        if let orgize::rowan::NodeOrToken::Token(t) = tok {
-            if t.kind() == SyntaxKind::BLANK_LINE {
-                count += 1;
-            } else {
-                break;
+    for item in node.children_with_tokens().collect::<Vec<_>>().into_iter().rev() {
+        match item {
+            orgize::rowan::NodeOrToken::Token(t) => {
+                if t.kind() == SyntaxKind::BLANK_LINE {
+                    count += 1;
+                } else {
+                    return count;
+                }
             }
-        } else {
-            break;
+            orgize::rowan::NodeOrToken::Node(n) => {
+                // Recurse into the last child node — blank lines may be
+                // nested deep inside sub-lists or other compound elements.
+                return count + count_trailing_blank_lines(&n);
+            }
         }
     }
     count

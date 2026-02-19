@@ -389,10 +389,7 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
             buf.push_str("#+");
             buf.push_str(key);
             buf.push(':');
-            if !value.is_empty() {
-                buf.push(' ');
-                buf.push_str(value);
-            }
+            buf.push_str(value);
             buf.push('\n');
         }
         Element::Comment { value } => {
@@ -452,10 +449,7 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
             buf.push_str("#+");
             buf.push_str(key);
             buf.push(':');
-            if !value.is_empty() {
-                buf.push(' ');
-                buf.push_str(value);
-            }
+            buf.push_str(value);
             buf.push('\n');
         }
         Element::LatexEnvironment { value } => {
@@ -1342,7 +1336,7 @@ fn main() {}
     fn keyword_element() {
         let elem = Element::Keyword {
             key: "TITLE".into(),
-            value: "My Document".into(),
+            value: " My Document".into(),
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
@@ -1584,7 +1578,7 @@ Description of the task.
             entry(EntryContent::Section {
                 elements: vec![Element::Keyword {
                     key: "TITLE".into(),
-                    value: "Test".into(),
+                    value: " Test".into(),
                 }],
                 body_spacing: vec![],
             }),
@@ -1784,7 +1778,7 @@ Description of the task.
     fn affiliated_keyword() {
         let elem = Element::AffiliatedKeyword {
             key: "NAME".into(),
-            value: "my-table".into(),
+            value: " my-table".into(),
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
