@@ -60,8 +60,11 @@ pub fn entry_to_org(entry: &OrgEntry) -> String {
 
 fn write_entry(buf: &mut String, entry: &OrgEntry) {
     match &entry.content {
-        EntryContent::Section { elements } => {
-            write_elements(buf, elements, 0, false);
+        EntryContent::Section {
+            elements,
+            body_spacing,
+        } => {
+            write_elements_with_spacing(buf, elements, body_spacing, 0, false);
         }
         EntryContent::Heading(heading) => {
             write_heading(buf, heading);
@@ -94,7 +97,7 @@ fn write_heading(buf: &mut String, heading: &Heading) {
 
     // --- Body elements ---
     if !heading.body.is_empty() {
-        write_elements(buf, &heading.body, 0, false);
+        write_elements_with_spacing(buf, &heading.body, &heading.body_spacing, 0, false);
     }
 
     // --- Blank lines after body (before children or next sibling) ---
@@ -225,11 +228,33 @@ fn needs_blank_line_between(prev: &Element, next: &Element) -> bool {
 ///
 /// When `indent_contents` is true every line of every element is indented by
 /// `indent` spaces (used for elements nested inside special blocks).
+///
+/// `body_spacing` optionally provides explicit inter-element spacing
+/// information: `body_spacing[i]` indicates whether there should be a blank
+/// line between `elements[i]` and `elements[i+1]`.  When empty, spacing is
+/// determined heuristically by `needs_blank_line_between`.
 fn write_elements(buf: &mut String, elements: &[Element], indent: usize, indent_contents: bool) {
+    write_elements_with_spacing(buf, elements, &[], indent, indent_contents);
+}
+
+/// Write elements with explicit inter-element spacing control.
+fn write_elements_with_spacing(
+    buf: &mut String,
+    elements: &[Element],
+    body_spacing: &[bool],
+    indent: usize,
+    indent_contents: bool,
+) {
     for (i, elem) in elements.iter().enumerate() {
         if i > 0 {
-            let prev = &elements[i - 1];
-            if needs_blank_line_between(prev, elem) {
+            let has_spacing_info = i - 1 < body_spacing.len();
+            let needs_blank = if has_spacing_info {
+                body_spacing[i - 1]
+            } else {
+                let prev = &elements[i - 1];
+                needs_blank_line_between(prev, elem)
+            };
+            if needs_blank {
                 buf.push('\n');
             }
         }
@@ -596,13 +621,14 @@ fn write_list_item(buf: &mut String, item: &ListItem, base_indent: usize) {
         write_list_item_first_element(buf, first, body_indent);
         let mut prev = first;
         for elem in rest {
-            // Add a blank line between consecutive paragraphs within a list
-            // item (these represent distinct paragraphs separated by blank
-            // lines in the source). Do NOT add blank lines before nested
-            // sub-lists — they follow the parent paragraph immediately.
-            if matches!(prev, Element::Paragraph { .. })
-                && matches!(elem, Element::Paragraph { .. })
-            {
+            // Add a blank line between sub-elements when this is a "loose"
+            // list item (has_blank_lines), or between consecutive paragraphs
+            // (which always represent distinct paragraphs separated by blank
+            // lines in the source).
+            let needs_blank = item.has_blank_lines
+                || (matches!(prev, Element::Paragraph { .. })
+                    && matches!(elem, Element::Paragraph { .. }));
+            if needs_blank {
                 buf.push('\n');
             }
             write_element(buf, elem, body_indent);
@@ -926,6 +952,7 @@ mod tests {
             planning: None,
             properties: vec![],
             pre_body_blank: None,
+            body_spacing: vec![],
             body: vec![],
             post_body_blank: None,
             children: vec![],
@@ -1053,6 +1080,7 @@ mod tests {
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "\
 #+begin_src rust :tangle yes
@@ -1119,6 +1147,7 @@ fn main() {}
         let elem = Element::Table { rows };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "\
 | Name  | Age |
@@ -1139,6 +1168,7 @@ fn main() {}
                 contents: vec![Element::Paragraph {
                     contents: vec![text("First")],
                 }],
+                has_blank_lines: false,
                 post_blank: None,
             },
             ListItem {
@@ -1149,6 +1179,7 @@ fn main() {}
                 contents: vec![Element::Paragraph {
                     contents: vec![text("Second")],
                 }],
+                has_blank_lines: false,
                 post_blank: None,
             },
         ];
@@ -1158,6 +1189,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "- First\n- [X] Second\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1173,6 +1205,7 @@ fn main() {}
             contents: vec![Element::Paragraph {
                 contents: vec![text("Definition here")],
             }],
+            has_blank_lines: false,
             post_blank: None,
         }];
         let elem = Element::PlainList {
@@ -1181,6 +1214,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "- Term :: Definition here\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1191,6 +1225,7 @@ fn main() {}
         let elem = Element::HorizontalRule;
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), "-----\n");
     }
@@ -1203,6 +1238,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), "#+TITLE: My Document\n");
     }
@@ -1215,6 +1251,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = ":LOGBOOK:\n- Note taken\n:END:\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1229,6 +1266,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_quote\nA wise saying.\n#+end_quote\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1329,6 +1367,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+BEGIN: clocktable :maxlevel 2\ncontent\n#+END:\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1341,6 +1380,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "# A comment line\n# Second line\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1353,6 +1393,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), ": fixed text\n");
     }
@@ -1364,6 +1405,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(
             entry_to_org(&e),
@@ -1381,6 +1423,7 @@ fn main() {}
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), "[fn:1] Footnote text.\n");
     }
@@ -1403,6 +1446,7 @@ fn main() {}
                 value: "task-42".into(),
             }],
             pre_body_blank: None,
+            body_spacing: vec![],
             body: vec![Element::Paragraph {
                 contents: vec![text("Description of the task.")],
             }],
@@ -1430,6 +1474,7 @@ Description of the task.
                     key: "TITLE".into(),
                     value: "Test".into(),
                 }],
+                body_spacing: vec![],
             }),
             entry(EntryContent::Heading(Box::new(Heading {
                 level: 1,
@@ -1452,6 +1497,7 @@ Description of the task.
                     value: "1:00".into(),
                 }],
                 pre_body_blank: None,
+            body_spacing: vec![],
                 body: vec![Element::PlainList {
                     kind: ListKind::Unordered,
                     items: vec![
@@ -1463,7 +1509,8 @@ Description of the task.
                             contents: vec![Element::Paragraph {
                                 contents: vec![text("Milk")],
                             }],
-                            post_blank: None,
+                            has_blank_lines: false,
+                post_blank: None,
                         },
                         ListItem {
                             bullet: "-".into(),
@@ -1473,7 +1520,8 @@ Description of the task.
                             contents: vec![Element::Paragraph {
                                 contents: vec![text("Eggs")],
                             }],
-                            post_blank: None,
+                            has_blank_lines: false,
+                post_blank: None,
                         },
                     ],
                 }],
@@ -1506,6 +1554,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_example\nexample line 1\nexample line 2\n#+end_example\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1520,6 +1569,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_center\nCentered text\n#+end_center\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1532,6 +1582,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_verse\nRoses are red\nViolets are blue\n#+end_verse\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1546,6 +1597,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_warning\nBe careful!\n#+end_warning\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1559,6 +1611,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_export html\n<div>content</div>\n#+end_export\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1571,6 +1624,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "#+begin_comment\nhidden comment\n#+end_comment\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1583,6 +1637,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "\\begin{equation}\nx = 42\n\\end{equation}\n";
         assert_eq!(entry_to_org(&e), expected);
@@ -1595,6 +1650,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), "%%(diary-anniversary 6 14 1988)\n");
     }
@@ -1606,6 +1662,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), "some raw text\n");
     }
@@ -1618,6 +1675,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         assert_eq!(entry_to_org(&e), "#+NAME: my-table\n");
     }
@@ -1659,7 +1717,7 @@ Description of the task.
 
     #[test]
     fn empty_section() {
-        let e = entry(EntryContent::Section { elements: vec![] });
+        let e = entry(EntryContent::Section { elements: vec![], body_spacing: vec![] });
         // An empty section should produce just a trailing newline.
         assert_eq!(entry_to_org(&e), "\n");
     }
@@ -1675,6 +1733,7 @@ Description of the task.
                 contents: vec![Element::Paragraph {
                     contents: vec![text("First item")],
                 }],
+                has_blank_lines: false,
                 post_blank: None,
             },
             ListItem {
@@ -1685,6 +1744,7 @@ Description of the task.
                 contents: vec![Element::Paragraph {
                     contents: vec![text("Second item")],
                 }],
+                has_blank_lines: false,
                 post_blank: None,
             },
         ];
@@ -1694,6 +1754,7 @@ Description of the task.
         };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
+            body_spacing: vec![],
         });
         let expected = "1. First item\n2. [@5] Second item\n";
         assert_eq!(entry_to_org(&e), expected);

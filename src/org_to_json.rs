@@ -54,12 +54,22 @@ pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
         }
 
         // Add section elements
-        elements.extend(convert_section_elements(&section));
+        let (sec_elements, mut sec_spacing) = convert_section_elements(&section);
+        // If we prepended a file-level property drawer, adjust spacing.
+        // There's no blank line between :END: and the first keyword.
+        if !elements.is_empty() && !sec_elements.is_empty() {
+            sec_spacing.insert(0, false);
+        }
+        elements.extend(sec_elements);
+        let body_spacing = sec_spacing;
 
         if !elements.is_empty() {
             entries.push(OrgEntry {
                 schema_version: SCHEMA_VERSION,
-                content: EntryContent::Section { elements },
+                content: EntryContent::Section {
+                    elements,
+                    body_spacing,
+                },
                 post_blank: None,
             });
             raw_texts.push(raw);
@@ -87,14 +97,26 @@ pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
             let raw = &raw_texts[i];
             let trailing_newlines = raw.bytes().rev().take_while(|&b| b == b'\n').count();
             // Subtract 1 for the mandatory newline at end of the last line
-            let blank_count = if trailing_newlines > 1 {
+            let mut blank_count = if trailing_newlines > 1 {
                 (trailing_newlines - 1) as u32
             } else {
                 0
             };
-            if blank_count > 0 {
-                entry.post_blank = Some(blank_count);
+            // When the entry has children, the trailing newlines in the raw
+            // text include the last child's post_body_blank (which is already
+            // tracked separately on the child heading). Subtract it to avoid
+            // double-counting.
+            if let EntryContent::Heading(ref heading) = entry.content {
+                if let Some(last_child) = heading.children.last() {
+                    if let Some(child_pdb) = last_child.post_body_blank {
+                        blank_count = blank_count.saturating_sub(child_pdb);
+                    }
+                }
             }
+            // Set post_blank: always set it explicitly so the writer doesn't
+            // fall back to the default of 1 blank line when the actual
+            // trailing blanks were already accounted for by child headings.
+            entry.post_blank = Some(blank_count);
         }
     }
 
@@ -142,8 +164,8 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
         }
     }
 
-    let (section_leading_blanks, section_trailing_blanks, body) = if let Some(section) =
-        hl.section()
+    let (section_leading_blanks, section_trailing_blanks, body, body_spacing) =
+        if let Some(section) = hl.section()
     {
         let section_children: Vec<_> = section.syntax().children().collect();
 
@@ -175,37 +197,31 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
             }
         }
 
-        // Source B: trailing BLANK_LINE tokens in the last non-blank child
-        if trailing == 0 {
-            if let Some(last) = section_children.last() {
-                if last.kind() == SyntaxKind::PARAGRAPH && !is_blank_paragraph(last) {
-                    for tok in last.children_with_tokens().collect::<Vec<_>>().into_iter().rev()
-                    {
-                        if let orgize::rowan::NodeOrToken::Token(t) = tok {
-                            if t.kind() == SyntaxKind::BLANK_LINE {
-                                trailing += 1;
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
         // If the section only has blank paragraphs, they are ALL leading
         // (pre_body_blank); don't double-count them as trailing.
+        // This check only applies to Source A (separate blank paragraph
+        // nodes), not Source B below.
         let total = section_children.len() as u32;
         if leading + trailing >= total {
             trailing = 0;
         }
 
-        let elements = convert_section_elements(&section);
-        (leading, trailing, elements)
+        // Source B: trailing BLANK_LINE tokens in the last non-blank child.
+        // These are tokens INSIDE a real element (paragraph or list),
+        // representing a different blank line than the leading blank paragraph
+        // nodes counted above.
+        if trailing == 0 {
+            if let Some(last) = section_children.last() {
+                if !is_blank_paragraph(last) {
+                    trailing = count_trailing_blank_lines(last);
+                }
+            }
+        }
+
+        let (elements, body_spacing) = convert_section_elements(&section);
+        (leading, trailing, elements, body_spacing)
     } else {
-        (0, 0, vec![])
+        (0, 0, vec![], vec![])
     };
 
     let children: Vec<Heading> = hl
@@ -253,6 +269,7 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
         properties,
         pre_body_blank,
         body,
+        body_spacing,
         post_body_blank,
         children,
     }
@@ -309,15 +326,26 @@ fn is_blank_paragraph(node: &orgize::SyntaxNode) -> bool {
         })
 }
 
-/// Convert the children of a `Section` node into our `Element` model.
+/// Convert the children of a `Section` node into our `Element` model,
+/// along with inter-element spacing information.
 ///
-/// A Section is a flat container of block-level elements (paragraphs,
-/// lists, blocks, drawers, etc.).
-fn convert_section_elements(section: &Section) -> Vec<Element> {
+/// Returns (elements, body_spacing) where body_spacing[i] indicates whether
+/// there was a blank line between elements[i] and elements[i+1].
+fn convert_section_elements(section: &Section) -> (Vec<Element>, Vec<bool>) {
     let syntax = section.syntax();
     let mut elements = Vec::new();
+    let mut spacing = Vec::new();
+    let mut saw_blank = false;
 
     for child in syntax.children() {
+        // Check if this is a blank paragraph (blank line marker)
+        if is_blank_paragraph(&child) {
+            saw_blank = true;
+            continue;
+        }
+        // Also check for trailing BLANK_LINE tokens in previous real element
+        // (orgize sometimes folds blank lines into the preceding paragraph)
+
         if let Some(el) = convert_block_element(&child) {
             // Filter out empty paragraphs (these arise from blank lines
             // between a heading and its children, and are not meaningful).
@@ -328,14 +356,34 @@ fn convert_section_elements(section: &Section) -> Vec<Element> {
                         _ => false,
                     })
                 {
+                    saw_blank = true;
                     continue;
                 }
             }
+            if !elements.is_empty() {
+                spacing.push(saw_blank);
+            }
             elements.push(el);
+            // Check if this element has trailing blank lines that should
+            // be attributed as spacing before the next element.
+            //
+            // For PARAGRAPH nodes: trailing BLANK_LINE tokens indicate
+            // blank lines after the paragraph.
+            //
+            // For LIST nodes: orgize folds trailing blank lines into the
+            // last LIST_ITEM's raw text, so we check the raw text instead.
+            saw_blank = if child.kind() == SyntaxKind::LIST {
+                let raw = child.to_string();
+                raw.ends_with("\n\n")
+            } else {
+                count_trailing_blank_lines(&child) > 0
+            };
+        } else {
+            // Skipped node (planning, property drawer, etc.) - preserve blank state
         }
     }
 
-    elements
+    (elements, spacing)
 }
 
 /// Convert a single block-level syntax node into an [`Element`].
@@ -595,7 +643,7 @@ fn convert_list_item(item: &OrgListItem) -> ListItem {
 
     // List item content lives in a LIST_ITEM_CONTENT child node, or
     // directly in the item's children after the bullet/checkbox/tag.
-    let contents = convert_list_item_contents(item);
+    let (contents, has_blank_lines) = convert_list_item_contents(item);
 
     ListItem {
         bullet,
@@ -603,13 +651,36 @@ fn convert_list_item(item: &OrgListItem) -> ListItem {
         counter_set,
         tag,
         contents,
+        has_blank_lines,
         post_blank: None,
     }
 }
 
+/// Count trailing BLANK_LINE tokens inside a syntax node (typically a paragraph).
+fn count_trailing_blank_lines(node: &orgize::SyntaxNode) -> u32 {
+    let mut count = 0u32;
+    for tok in node.children_with_tokens().collect::<Vec<_>>().into_iter().rev() {
+        if let orgize::rowan::NodeOrToken::Token(t) = tok {
+            if t.kind() == SyntaxKind::BLANK_LINE {
+                count += 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    count
+}
+
 /// Extract the block-level contents of a list item.
-fn convert_list_item_contents(item: &OrgListItem) -> Vec<Element> {
+///
+/// When a paragraph inside a list item has trailing BLANK_LINE tokens
+/// (blank lines between the paragraph and a nested sub-list), we detect
+/// this as a "loose" list item and set `has_blank_lines` on the ListItem.
+fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, bool) {
     let mut elements = Vec::new();
+    let mut has_blank_lines = false;
     for child in item.syntax().children() {
         let kind = child.kind();
         // Skip structural tokens that are not content.
@@ -623,9 +694,17 @@ fn convert_list_item_contents(item: &OrgListItem) -> Vec<Element> {
         }
         // LIST_ITEM_CONTENT wraps the actual content children.
         if kind == SyntaxKind::LIST_ITEM_CONTENT {
-            for grandchild in child.children() {
-                if let Some(el) = convert_block_element(&grandchild) {
+            let grandchildren: Vec<_> = child.children().collect();
+            for (gi, grandchild) in grandchildren.iter().enumerate() {
+                if let Some(el) = convert_block_element(grandchild) {
                     elements.push(strip_list_item_indentation(el));
+                }
+                // Check for trailing BLANK_LINE tokens in this child
+                // (e.g., a paragraph with blank lines before a nested sub-list).
+                if gi + 1 < grandchildren.len()
+                    && count_trailing_blank_lines(grandchild) > 0
+                {
+                    has_blank_lines = true;
                 }
             }
             continue;
@@ -634,7 +713,7 @@ fn convert_list_item_contents(item: &OrgListItem) -> Vec<Element> {
             elements.push(strip_list_item_indentation(el));
         }
     }
-    elements
+    (elements, has_blank_lines)
 }
 
 /// Strip leading whitespace from paragraph text within list items.
@@ -1312,7 +1391,7 @@ mod tests {
         let entries = org_to_entries("Hello world.\n");
         assert_eq!(entries.len(), 1);
         match &entries[0].content {
-            EntryContent::Section { elements } => {
+            EntryContent::Section { elements, .. } => {
                 assert!(!elements.is_empty());
             }
             _ => panic!("expected Section"),
@@ -1404,7 +1483,7 @@ mod tests {
         let entries = org_to_entries(input);
         assert_eq!(entries.len(), 1);
         match &entries[0].content {
-            EntryContent::Section { elements } => {
+            EntryContent::Section { elements, .. } => {
                 assert!(elements
                     .iter()
                     .any(|e| matches!(e, Element::SrcBlock { .. })));
@@ -1418,7 +1497,7 @@ mod tests {
         let input = "This is *bold* and /italic/ and ~code~.\n";
         let entries = org_to_entries(input);
         match &entries[0].content {
-            EntryContent::Section { elements } => match &elements[0] {
+            EntryContent::Section { elements, .. } => match &elements[0] {
                 Element::Paragraph { contents } => {
                     let has_bold = contents
                         .iter()
@@ -1444,7 +1523,7 @@ mod tests {
         let input = "[[https://example.com][Example]]\n";
         let entries = org_to_entries(input);
         match &entries[0].content {
-            EntryContent::Section { elements } => match &elements[0] {
+            EntryContent::Section { elements, .. } => match &elements[0] {
                 Element::Paragraph { contents } => {
                     let link = contents
                         .iter()
@@ -1469,7 +1548,7 @@ mod tests {
         let input = "- item 1\n- item 2\n";
         let entries = org_to_entries(input);
         match &entries[0].content {
-            EntryContent::Section { elements } => {
+            EntryContent::Section { elements, .. } => {
                 assert!(elements
                     .iter()
                     .any(|e| matches!(e, Element::PlainList { .. })));
@@ -1483,7 +1562,7 @@ mod tests {
         let input = "| a | b |\n|---+---|\n| c | d |\n";
         let entries = org_to_entries(input);
         match &entries[0].content {
-            EntryContent::Section { elements } => {
+            EntryContent::Section { elements, .. } => {
                 let table = elements.iter().find(|e| matches!(e, Element::Table { .. }));
                 assert!(table.is_some());
                 match table.unwrap() {

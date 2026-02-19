@@ -932,8 +932,8 @@ Preamble paragraph.
 * TODO [#A] First heading :project:urgent:
 SCHEDULED: <2024-01-15 Mon> DEADLINE: <2024-01-20 Sat>
 :PROPERTIES:
-:ID: entry-001
-:EFFORT: 3:00
+:ID:       entry-001
+:EFFORT:   3:00
 :END:
 
 A paragraph with *bold*, /italic/, ~code~, =verbatim= text.

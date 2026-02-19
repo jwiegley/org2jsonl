@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn is_false(v: &bool) -> bool {
+    !v
+}
+
 /// A single top-level entry in the JSONL output.
 /// Each line of the JSONL file is one of these.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,7 +23,11 @@ pub struct OrgEntry {
 pub enum EntryContent {
     /// Content before the first heading (zeroth section)
     #[serde(rename = "section")]
-    Section { elements: Vec<Element> },
+    Section {
+        elements: Vec<Element>,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        body_spacing: Vec<bool>,
+    },
     /// A top-level heading with all nested content
     #[serde(rename = "heading")]
     Heading(Box<Heading>),
@@ -52,6 +60,11 @@ pub struct Heading {
     /// Body elements of this heading's section
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub body: Vec<Element>,
+    /// Whether there is a blank line between consecutive body elements.
+    /// Length is body.len() - 1 (one entry per pair of adjacent elements).
+    /// true = blank line separator, false = no blank line.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub body_spacing: Vec<bool>,
     /// Number of blank lines after body content (before first child heading)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub post_body_blank: Option<u32>,
@@ -173,6 +186,10 @@ pub struct ListItem {
     pub tag: Option<Vec<InlineContent>>,
     /// The content elements of this list item
     pub contents: Vec<Element>,
+    /// Whether this list item has blank lines between its sub-elements
+    /// (a "loose" list item in Org-mode terminology)
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub has_blank_lines: bool,
     /// Number of blank lines after this list item
     #[serde(skip_serializing_if = "Option::is_none")]
     pub post_blank: Option<u32>,
