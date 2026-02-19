@@ -13,6 +13,7 @@ use orgize::ast::{
     Snippet, SourceBlock, SpecialBlock, Strike, Subscript, Superscript, Target, Timestamp,
     Underline, Verbatim, VerseBlock,
 };
+use orgize::config::ParseConfig;
 use orgize::rowan::ast::AstNode;
 use orgize::{Org, SyntaxKind};
 
@@ -29,6 +30,28 @@ use crate::SCHEMA_VERSION;
 /// "zeroth section") becomes an [`EntryContent::Section`].
 pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
     let org = Org::parse(input);
+    org_to_entries_from_parsed(org)
+}
+
+/// Parse Org-mode text with custom TODO keywords.
+///
+/// `todo_keywords` are active/incomplete states (e.g., `["TODO", "OPEN", "IN_PROGRESS"]`).
+/// `done_keywords` are completed states (e.g., `["DONE", "CLOSED", "TOMBSTONE"]`).
+pub fn org_to_entries_with_keywords(
+    input: &str,
+    todo_keywords: &[&str],
+    done_keywords: &[&str],
+) -> Vec<OrgEntry> {
+    let mut config = ParseConfig::default();
+    config.todo_keywords = (
+        todo_keywords.iter().map(|s| (*s).to_string()).collect(),
+        done_keywords.iter().map(|s| (*s).to_string()).collect(),
+    );
+    let org = config.parse(input);
+    org_to_entries_from_parsed(org)
+}
+
+fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
     let doc = org.document();
     let mut entries = Vec::new();
     let mut raw_texts: Vec<String> = Vec::new();
