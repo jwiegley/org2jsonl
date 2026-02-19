@@ -193,11 +193,7 @@ fn write_properties(buf: &mut String, properties: &[Property]) {
         // So KEY: is padded to 10 chars minimum
         let key_colon_len = prop.key.len() + 2; // ":" + key + ":"
         let pad_to = 10usize; // Emacs default
-        let padding = if key_colon_len < pad_to {
-            pad_to - key_colon_len
-        } else {
-            0
-        };
+        let padding = pad_to.saturating_sub(key_colon_len);
         for _ in 0..padding {
             buf.push(' ');
         }
@@ -703,7 +699,9 @@ fn write_list_item_first_element(buf: &mut String, element: &Element, body_inden
                     }
                 }
             } else {
-                // Empty paragraph
+                // Empty paragraph — trim any trailing whitespace (e.g.,
+                // the space after " :: " on a descriptive list tag line).
+                trim_trailing_whitespace(buf);
                 buf.push('\n');
             }
         }

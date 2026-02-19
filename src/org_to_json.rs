@@ -248,21 +248,46 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
         .map(|(idx, child)| {
             let mut heading = convert_headline(child, false);
             let is_last = idx + 1 == child_count;
-            // Set post_blank for non-last headings without children
-            // and where post_body_blank isn't already set (to avoid
-            // double-counting trailing blank lines).
-            if !is_last
-                && heading.children.is_empty()
-                && heading.post_body_blank.is_none()
-            {
+            // Set post_blank for non-last headings to capture inter-sibling
+            // spacing.  The raw text's trailing newlines include both the
+            // heading's own trailing blanks (post_body_blank or descendant
+            // post_body_blank) AND the inter-sibling spacing.  Subtract the
+            // already-tracked blanks to isolate the inter-sibling part.
+            if !is_last {
                 let text = child.syntax().to_string();
                 let trailing_newlines =
                     text.bytes().rev().take_while(|&b| b == b'\n').count();
-                let blank_count = if trailing_newlines > 1 {
+                let mut blank_count = if trailing_newlines > 1 {
                     (trailing_newlines - 1) as u32
                 } else {
                     0
                 };
+                if heading.children.is_empty() {
+                    // Leaf heading: own post_body_blank is at the trailing end
+                    if let Some(pbb) = heading.post_body_blank {
+                        blank_count = blank_count.saturating_sub(pbb);
+                    }
+                } else {
+                    // Has children: walk to deepest last descendant
+                    let mut current = &heading;
+                    loop {
+                        match current.children.last() {
+                            Some(lc) if !lc.children.is_empty() => {
+                                current = lc;
+                            }
+                            Some(lc) => {
+                                if let Some(pbb) = lc.post_body_blank {
+                                    blank_count = blank_count.saturating_sub(pbb);
+                                }
+                                if let Some(pb) = lc.post_blank {
+                                    blank_count = blank_count.saturating_sub(pb);
+                                }
+                                break;
+                            }
+                            None => break,
+                        }
+                    }
+                }
                 if blank_count > 0 {
                     heading.post_blank = Some(blank_count);
                 }
