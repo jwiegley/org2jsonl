@@ -1882,4 +1882,221 @@ Description of the task.
         };
         assert_eq!(inline_to_string(&[ts]), "<2024-01-15 Mon>");
     }
+
+    #[test]
+    fn empty_comment_value() {
+        let elem = Element::Comment {
+            value: "".into(),
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        assert_eq!(entry_to_org(&e), "#\n");
+    }
+
+    #[test]
+    fn empty_fixed_width_value() {
+        let elem = Element::FixedWidth {
+            value: "".into(),
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        assert_eq!(entry_to_org(&e), ":\n");
+    }
+
+    #[test]
+    fn empty_footnote_definition() {
+        let elem = Element::FootnoteDefinition {
+            label: "1".into(),
+            elements: vec![],
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        // The code emits "[fn:label] " then "\n" for empty footnotes.
+        assert_eq!(entry_to_org(&e), "[fn:1] \n");
+    }
+
+    #[test]
+    fn empty_latex_environment() {
+        let elem = Element::LatexEnvironment {
+            value: "".into(),
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        assert_eq!(entry_to_org(&e), "\n");
+    }
+
+    #[test]
+    fn empty_raw_element() {
+        let elem = Element::Raw {
+            value: "".into(),
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        assert_eq!(entry_to_org(&e), "\n");
+    }
+
+    #[test]
+    fn list_item_with_no_contents() {
+        let items = vec![ListItem {
+            bullet: "-".into(),
+            checkbox: None,
+            counter_set: None,
+            tag: None,
+            contents: vec![],
+            content_spacing: vec![],
+            post_blank: None,
+        }];
+        let elem = Element::PlainList {
+            kind: ListKind::Unordered,
+            items,
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        assert_eq!(entry_to_org(&e), "-\n");
+    }
+
+    #[test]
+    fn list_item_first_element_not_paragraph() {
+        let items = vec![ListItem {
+            bullet: "-".into(),
+            checkbox: None,
+            counter_set: None,
+            tag: None,
+            contents: vec![Element::SrcBlock {
+                language: "python".into(),
+                parameters: None,
+                value: "print(1)\n".into(),
+            }],
+            content_spacing: vec![],
+            post_blank: None,
+        }];
+        let elem = Element::PlainList {
+            kind: ListKind::Unordered,
+            items,
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        let result = entry_to_org(&e);
+        assert!(result.starts_with("-\n"), "expected bullet on its own line, got: {result:?}");
+        assert!(result.contains("#+begin_src python"));
+        assert!(result.contains("print(1)"));
+        assert!(result.contains("#+end_src"));
+    }
+
+    #[test]
+    fn consecutive_light_elements_no_blank_line() {
+        let elems = vec![
+            Element::Keyword {
+                key: "TITLE".into(),
+                value: " My Document".into(),
+            },
+            Element::Keyword {
+                key: "AUTHOR".into(),
+                value: " John".into(),
+            },
+        ];
+        let e = entry(EntryContent::Section {
+            elements: elems,
+            body_spacing: vec![],
+        });
+        let result = entry_to_org(&e);
+        assert_eq!(result, "#+TITLE: My Document\n#+AUTHOR: John\n");
+    }
+
+    #[test]
+    fn footnote_def_with_rest_elements() {
+        let elem = Element::FootnoteDefinition {
+            label: "2".into(),
+            elements: vec![
+                Element::Paragraph {
+                    contents: vec![text("First paragraph.")],
+                },
+                Element::Paragraph {
+                    contents: vec![text("Second paragraph.")],
+                },
+            ],
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        let result = entry_to_org(&e);
+        assert!(result.starts_with("[fn:2] First paragraph."), "got: {result:?}");
+        assert!(result.contains("Second paragraph."));
+    }
+
+    #[test]
+    fn subscript_without_braces() {
+        let sub = InlineContent::Subscript {
+            contents: vec![text("i")],
+            use_braces: false,
+        };
+        assert_eq!(inline_to_string(&[sub]), "_i");
+    }
+
+    #[test]
+    fn superscript_without_braces() {
+        let sup = InlineContent::Superscript {
+            contents: vec![text("2")],
+            use_braces: false,
+        };
+        assert_eq!(inline_to_string(&[sup]), "^2");
+    }
+
+    #[test]
+    fn partial_checkbox_in_list() {
+        let items = vec![ListItem {
+            bullet: "-".into(),
+            checkbox: Some(CheckboxState::Partial),
+            counter_set: None,
+            tag: None,
+            contents: vec![Element::Paragraph {
+                contents: vec![text("Partial item")],
+            }],
+            content_spacing: vec![],
+            post_blank: None,
+        }];
+        let elem = Element::PlainList {
+            kind: ListKind::Unordered,
+            items,
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        assert_eq!(entry_to_org(&e), "- [-] Partial item\n");
+    }
+
+    #[test]
+    fn footnote_def_non_paragraph_first_element() {
+        let elem = Element::FootnoteDefinition {
+            label: "3".into(),
+            elements: vec![Element::SrcBlock {
+                language: "elisp".into(),
+                parameters: None,
+                value: "(message \"hello\")\n".into(),
+            }],
+        };
+        let e = entry(EntryContent::Section {
+            elements: vec![elem],
+            body_spacing: vec![],
+        });
+        let result = entry_to_org(&e);
+        assert!(result.starts_with("[fn:3]"), "got: {result:?}");
+        assert!(result.contains("#+begin_src elisp"));
+    }
 }

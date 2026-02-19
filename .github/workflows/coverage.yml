@@ -10,8 +10,9 @@ on:
 
 env:
   CARGO_INCREMENTAL: 0
-  # Coverage threshold is set to current coverage (90.20%) rounded down to nearest 5%
+  # Coverage threshold for library code (excluding bin/ CLI wrappers)
   COVERAGE_THRESHOLD: 90
+  COVERAGE_IGNORE_REGEX: 'tests/.*|benches/.*|examples/.*|bin/.*'
 
 jobs:
   coverage:
@@ -45,16 +46,22 @@ jobs:
       - name: Run tests with coverage
         run: |
           cargo llvm-cov test \
-            --ignore-filename-regex='tests/.*|benches/.*|examples/.*' \
+            --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
             --lcov \
-            --output-path lcov.info \
-            --fail-under-lines $COVERAGE_THRESHOLD
+            --output-path lcov.info
+
+      - name: Check coverage threshold
+        run: |
+          cargo llvm-cov report \
+            --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
+            --fail-under-lines $COVERAGE_THRESHOLD \
+            || { echo "::error::Line coverage is below the ${COVERAGE_THRESHOLD}% threshold (see TOTAL row above)"; exit 1; }
 
       - name: Generate HTML coverage report
         if: always()
         run: |
           cargo llvm-cov report \
-            --ignore-filename-regex='tests/.*|benches/.*|examples/.*' \
+            --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
             --html \
             --output-dir target/coverage
 

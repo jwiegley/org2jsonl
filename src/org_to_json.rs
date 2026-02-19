@@ -1862,4 +1862,248 @@ mod tests {
         assert!(matches!(entries[1].content, EntryContent::Heading(_)));
         assert!(matches!(entries[2].content, EntryContent::Heading(_)));
     }
+
+    #[test]
+    fn checkbox_partial_state() {
+        let input = "- [-] Partially done\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => match &elements[0] {
+                Element::PlainList { items, .. } => {
+                    assert_eq!(items[0].checkbox, Some(CheckboxState::Partial));
+                }
+                other => panic!("expected PlainList, got {:?}", other),
+            },
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn counter_set_on_list_item() {
+        let input = "1. [@5] Fifth item\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => match &elements[0] {
+                Element::PlainList { items, .. } => {
+                    assert_eq!(items[0].counter_set.as_deref(), Some("5"));
+                }
+                other => panic!("expected PlainList, got {:?}", other),
+            },
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn file_level_property_drawer() {
+        let input = ":PROPERTIES:\n:CUSTOM_ID: test\n:END:\n#+TITLE: My Doc\n* Heading\n";
+        let entries = org_to_entries(input);
+        // The first entry should be a Section containing the property drawer
+        // (as a Raw element) followed by the TITLE keyword.
+        assert!(entries.len() >= 2, "expected at least 2 entries, got {}", entries.len());
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                assert!(
+                    elements.len() >= 2,
+                    "expected at least 2 elements in section, got {}: {:?}",
+                    elements.len(),
+                    elements
+                );
+                // First element should be Raw containing the property drawer
+                match &elements[0] {
+                    Element::Raw { value } => {
+                        assert!(
+                            value.contains(":CUSTOM_ID:"),
+                            "expected property drawer in Raw, got: {value:?}"
+                        );
+                    }
+                    other => panic!("expected Raw for property drawer, got {:?}", other),
+                }
+                // Second element should be the TITLE keyword
+                match &elements[1] {
+                    Element::Keyword { key, .. } => {
+                        assert_eq!(key, "TITLE");
+                    }
+                    other => panic!("expected Keyword for TITLE, got {:?}", other),
+                }
+            }
+            other => panic!("expected Section as first entry, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn subscript_bare_form() {
+        let input = "The variable x_{i} is important.\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => match &elements[0] {
+                Element::Paragraph { contents } => {
+                    let has_sub = contents
+                        .iter()
+                        .any(|c| matches!(c, InlineContent::Subscript { .. }));
+                    assert!(has_sub, "expected Subscript in {:?}", contents);
+                }
+                other => panic!("expected Paragraph, got {:?}", other),
+            },
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn superscript_bare_form() {
+        let input = "The value x^{2} is squared.\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => match &elements[0] {
+                Element::Paragraph { contents } => {
+                    let has_sup = contents
+                        .iter()
+                        .any(|c| matches!(c, InlineContent::Superscript { .. }));
+                    assert!(has_sup, "expected Superscript in {:?}", contents);
+                }
+                other => panic!("expected Paragraph, got {:?}", other),
+            },
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn footnote_definition_parsing() {
+        let input = "[fn:1] This is the footnote text.\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let fndef = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::FootnoteDefinition { .. }));
+                assert!(fndef.is_some(), "expected FootnoteDefinition in {:?}", elements);
+                match fndef.unwrap() {
+                    Element::FootnoteDefinition { label, elements } => {
+                        assert_eq!(label, "1");
+                        assert!(!elements.is_empty(), "expected non-empty footnote body");
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn latex_environment_parsing() {
+        let input = "\\begin{equation}\nx = 42\n\\end{equation}\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let latex = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::LatexEnvironment { .. }));
+                assert!(latex.is_some(), "expected LatexEnvironment in {:?}", elements);
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn export_block_parsing() {
+        let input = "#+begin_export html\n<div>hello</div>\n#+end_export\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let export = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::ExportBlock { .. }));
+                assert!(export.is_some(), "expected ExportBlock in {:?}", elements);
+                match export.unwrap() {
+                    Element::ExportBlock { backend, value } => {
+                        assert_eq!(backend, "html");
+                        assert!(value.contains("<div>hello</div>"));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn comment_element_parsing() {
+        let input = "# This is a comment\n# Second line\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let comment = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::Comment { .. }));
+                assert!(comment.is_some(), "expected Comment in {:?}", elements);
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn fixed_width_parsing() {
+        let input = ": fixed width text\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let fw = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::FixedWidth { .. }));
+                assert!(fw.is_some(), "expected FixedWidth in {:?}", elements);
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn drawer_parsing() {
+        let input = ":LOGBOOK:\n- Note taken\n:END:\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let drawer = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::Drawer { .. }));
+                assert!(drawer.is_some(), "expected Drawer in {:?}", elements);
+                match drawer.unwrap() {
+                    Element::Drawer { name, .. } => {
+                        assert_eq!(name, "LOGBOOK");
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn horizontal_rule_parsing() {
+        let input = "-----\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => {
+                let rule = elements
+                    .iter()
+                    .find(|e| matches!(e, Element::HorizontalRule));
+                assert!(rule.is_some(), "expected HorizontalRule in {:?}", elements);
+            }
+            _ => panic!("expected Section"),
+        }
+    }
+
+    #[test]
+    fn descriptive_list_parsing() {
+        let input = "- Term :: Definition here\n";
+        let entries = org_to_entries(input);
+        match &entries[0].content {
+            EntryContent::Section { elements, .. } => match &elements[0] {
+                Element::PlainList { kind, items } => {
+                    assert_eq!(*kind, ListKind::Descriptive);
+                    assert!(items[0].tag.is_some(), "expected tag in descriptive list item");
+                }
+                other => panic!("expected PlainList, got {:?}", other),
+            },
+            _ => panic!("expected Section"),
+        }
+    }
 }
