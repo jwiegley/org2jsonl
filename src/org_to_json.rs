@@ -103,13 +103,29 @@ pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
                 0
             };
             // When the entry has children, the trailing newlines in the raw
-            // text include the last child's post_body_blank (which is already
-            // tracked separately on the child heading). Subtract it to avoid
-            // double-counting.
+            // text include the deepest last descendant's post_body_blank
+            // (which is already tracked separately on that heading).
+            // Walk the last-descendant chain to find it — intermediate
+            // headings' post_body_blank sits between their body and
+            // children, not at the trailing end of the raw text.
             if let EntryContent::Heading(ref heading) = entry.content {
-                if let Some(last_child) = heading.children.last() {
-                    if let Some(child_pdb) = last_child.post_body_blank {
-                        blank_count = blank_count.saturating_sub(child_pdb);
+                let mut current: &Heading = heading;
+                loop {
+                    match current.children.last() {
+                        Some(last_child) if !last_child.children.is_empty() => {
+                            current = last_child;
+                        }
+                        Some(last_child) => {
+                            // Deepest last descendant (leaf)
+                            if let Some(pbb) = last_child.post_body_blank {
+                                blank_count = blank_count.saturating_sub(pbb);
+                            }
+                            if let Some(pb) = last_child.post_blank {
+                                blank_count = blank_count.saturating_sub(pb);
+                            }
+                            break;
+                        }
+                        None => break,
                     }
                 }
             }
@@ -224,9 +240,35 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
         (0, 0, vec![], vec![])
     };
 
-    let children: Vec<Heading> = hl
-        .headlines()
-        .map(|child| convert_headline(&child, false))
+    let child_headlines: Vec<_> = hl.headlines().collect();
+    let child_count = child_headlines.len();
+    let children: Vec<Heading> = child_headlines
+        .iter()
+        .enumerate()
+        .map(|(idx, child)| {
+            let mut heading = convert_headline(child, false);
+            let is_last = idx + 1 == child_count;
+            // Set post_blank for non-last headings without children
+            // and where post_body_blank isn't already set (to avoid
+            // double-counting trailing blank lines).
+            if !is_last
+                && heading.children.is_empty()
+                && heading.post_body_blank.is_none()
+            {
+                let text = child.syntax().to_string();
+                let trailing_newlines =
+                    text.bytes().rev().take_while(|&b| b == b'\n').count();
+                let blank_count = if trailing_newlines > 1 {
+                    (trailing_newlines - 1) as u32
+                } else {
+                    0
+                };
+                if blank_count > 0 {
+                    heading.post_blank = Some(blank_count);
+                }
+            }
+            heading
+        })
         .collect();
 
     // Only treat the blank lines as pre_body_blank when there is actual
@@ -272,6 +314,7 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
         body_spacing,
         post_body_blank,
         children,
+        post_blank: None,
     }
 }
 
@@ -584,7 +627,7 @@ fn convert_list(list: &List) -> Element {
         .iter()
         .enumerate()
         .map(|(idx, item)| {
-            let mut li = convert_list_item(item);
+            let mut li = convert_list_item(item, kind == ListKind::Descriptive);
             let is_last = idx + 1 == item_count;
             if !is_last {
                 let text = item.syntax().to_string();
@@ -605,7 +648,7 @@ fn convert_list(list: &List) -> Element {
     Element::PlainList { kind, items }
 }
 
-fn convert_list_item(item: &OrgListItem) -> ListItem {
+fn convert_list_item(item: &OrgListItem, is_descriptive: bool) -> ListItem {
     let bullet = item.bullet().to_string();
 
     let checkbox = item.checkbox().map(|cb| {
@@ -619,7 +662,7 @@ fn convert_list_item(item: &OrgListItem) -> ListItem {
 
     let counter_set = item.counter().map(|c| c.to_string());
 
-    let tag: Option<Vec<InlineContent>> = {
+    let tag_inlines: Option<Vec<InlineContent>> = {
         let tag_elems: Vec<_> = item.tag().collect();
         if tag_elems.is_empty() {
             None
@@ -643,7 +686,40 @@ fn convert_list_item(item: &OrgListItem) -> ListItem {
 
     // List item content lives in a LIST_ITEM_CONTENT child node, or
     // directly in the item's children after the bullet/checkbox/tag.
-    let (contents, has_blank_lines) = convert_list_item_contents(item);
+    let (mut contents, content_spacing) = convert_list_item_contents(item);
+
+    // When the list is NOT descriptive but orgize parsed a tag (because the
+    // text contained `::`, e.g. `std::vector`), inline the tag back into
+    // the first paragraph's contents so the `::` is preserved as literal text.
+    let tag = if !is_descriptive {
+        if let Some(mut tag_contents) = tag_inlines {
+            // Detect original spacing around `::` from raw item text.
+            // If raw text has ` :: ` (with spaces), preserve that form.
+            let raw_text = item.syntax().to_string();
+            let separator = if raw_text.contains(" :: ") { " :: " } else { "::" };
+            tag_contents.push(InlineContent::Text {
+                value: separator.to_string(),
+            });
+            // Prepend tag contents to the first paragraph
+            if let Some(Element::Paragraph { contents: ref mut para }) = contents.first_mut() {
+                tag_contents.append(para);
+                *para = tag_contents;
+            } else if !contents.is_empty() {
+                // No paragraph first element; create one from tag + "::"
+                contents.insert(
+                    0,
+                    Element::Paragraph {
+                        contents: tag_contents,
+                    },
+                );
+            }
+            None
+        } else {
+            None
+        }
+    } else {
+        tag_inlines
+    };
 
     ListItem {
         bullet,
@@ -651,7 +727,7 @@ fn convert_list_item(item: &OrgListItem) -> ListItem {
         counter_set,
         tag,
         contents,
-        has_blank_lines,
+        content_spacing,
         post_blank: None,
     }
 }
@@ -675,12 +751,11 @@ fn count_trailing_blank_lines(node: &orgize::SyntaxNode) -> u32 {
 
 /// Extract the block-level contents of a list item.
 ///
-/// When a paragraph inside a list item has trailing BLANK_LINE tokens
-/// (blank lines between the paragraph and a nested sub-list), we detect
-/// this as a "loose" list item and set `has_blank_lines` on the ListItem.
-fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, bool) {
+/// Returns the elements and a per-element Vec of blank-line counts
+/// (how many blank lines follow each element in the source).
+fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, Vec<u32>) {
     let mut elements = Vec::new();
-    let mut has_blank_lines = false;
+    let mut spacing = Vec::new();
     for child in item.syntax().children() {
         let kind = child.kind();
         // Skip structural tokens that are not content.
@@ -698,22 +773,31 @@ fn convert_list_item_contents(item: &OrgListItem) -> (Vec<Element>, bool) {
             for (gi, grandchild) in grandchildren.iter().enumerate() {
                 if let Some(el) = convert_block_element(grandchild) {
                     elements.push(strip_list_item_indentation(el));
-                }
-                // Check for trailing BLANK_LINE tokens in this child
-                // (e.g., a paragraph with blank lines before a nested sub-list).
-                if gi + 1 < grandchildren.len()
-                    && count_trailing_blank_lines(grandchild) > 0
-                {
-                    has_blank_lines = true;
+                    // Count trailing blank lines (blank lines between this
+                    // element and the next). For the last element, use 0.
+                    let mut blank_count = if gi + 1 < grandchildren.len() {
+                        count_trailing_blank_lines(grandchild)
+                    } else {
+                        0
+                    };
+                    // Empty paragraphs (purely BLANK_LINE tokens) include
+                    // the structural line ending as a BLANK_LINE, which
+                    // inflates the count by 1.  Subtract it so the writer
+                    // doesn't emit an extra blank line.
+                    if blank_count > 0 && is_blank_paragraph(grandchild) {
+                        blank_count -= 1;
+                    }
+                    spacing.push(blank_count);
                 }
             }
             continue;
         }
         if let Some(el) = convert_block_element(&child) {
             elements.push(strip_list_item_indentation(el));
+            spacing.push(0);
         }
     }
-    (elements, has_blank_lines)
+    (elements, spacing)
 }
 
 /// Strip leading whitespace from paragraph text within list items.
@@ -727,6 +811,21 @@ fn strip_list_item_indentation(el: Element) -> Element {
             let contents = strip_leading_whitespace(contents);
             Element::Paragraph { contents }
         }
+        Element::SrcBlock {
+            language,
+            parameters,
+            value,
+        } => Element::SrcBlock {
+            language,
+            parameters,
+            value: dedent_block_value(&value),
+        },
+        Element::ExampleBlock { value } => Element::ExampleBlock {
+            value: dedent_block_value(&value),
+        },
+        Element::FixedWidth { value } => Element::FixedWidth {
+            value: dedent_block_value(&value),
+        },
         other => other,
     }
 }
@@ -767,6 +866,43 @@ fn strip_leading_whitespace(mut contents: Vec<InlineContent>) -> Vec<InlineConte
         }
     }
     contents
+}
+
+/// Dedent all lines in a block value (e.g., src block content) by removing
+/// the minimum common leading whitespace.  orgize preserves source indentation
+/// inside list items; this normalization prevents indentation doubling.
+fn dedent_block_value(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let min_indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    if min_indent == 0 {
+        return text.to_string();
+    }
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            if line.trim().is_empty() {
+                if i + 1 == lines.len() && line.is_empty() {
+                    // Preserve trailing empty fragment from split
+                    ""
+                } else {
+                    ""
+                }
+            } else if line.len() >= min_indent {
+                &line[min_indent..]
+            } else {
+                line.trim_start()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Dedent continuation lines in multi-line text.
@@ -974,20 +1110,81 @@ fn convert_table(table: &OrgTable) -> Element {
 
 fn convert_table_row(row: &OrgTableRow) -> TableRow {
     if row.is_rule() {
+        // Measure column widths from rule text: |---+---+---|
+        // Each segment between | and +/| has dashes; width = dashes - 2
+        // (for the padding spaces that would be in a standard row).
+        let raw = row.syntax().to_string();
+        let raw_trimmed = raw.trim_end_matches('\n');
+        let mut cell_widths = Vec::new();
+        // Strip leading '|' then split by '+'
+        let inner = raw_trimmed.strip_prefix('|').unwrap_or(raw_trimmed);
+        // The last segment ends with '|' — strip it
+        let inner = inner.strip_suffix('|').unwrap_or(inner);
+        for segment in inner.split('+') {
+            // Each segment is like "------" (all dashes)
+            // Width of the content area = segment_len - 2 (for padding spaces)
+            let dash_count = segment.len();
+            let content_width = dash_count.saturating_sub(2);
+            cell_widths.push(content_width);
+        }
         return TableRow {
             kind: TableRowKind::Rule,
+            cell_widths,
         };
     }
 
-    let cells: Vec<Vec<InlineContent>> = row
+    // orgize skips empty cells (those containing only whitespace between pipes).
+    // We need to reconstruct empty cells so columns stay aligned.
+    // Count expected cells from the raw text by splitting on '|'.
+    let raw = row.syntax().to_string();
+    let raw_trimmed = raw.trim_end_matches('\n');
+    let parts: Vec<&str> = raw_trimmed.split('|').collect();
+    // parts[0] is before first |, parts[last] is after last | — skip both.
+    let expected_cells = parts.len().saturating_sub(2);
+
+    // Measure per-cell widths from raw text (content width excluding
+    // the mandatory single padding space on each side).
+    let mut cell_widths: Vec<usize> = Vec::with_capacity(expected_cells);
+    for i in 0..expected_cells {
+        let raw_cell = parts.get(i + 1).unwrap_or(&"");
+        let without_padding = raw_cell.strip_prefix(' ').unwrap_or(raw_cell);
+        let without_padding = without_padding.strip_suffix(' ').unwrap_or(without_padding);
+        cell_widths.push(without_padding.len());
+    }
+
+    // Get orgize's parsed cells (which skip empty ones).
+    let parsed_cells: Vec<Vec<InlineContent>> = row
         .syntax()
         .children()
         .filter_map(OrgTableCell::cast)
         .map(|cell| convert_inline_children(cell.syntax()))
         .collect();
 
+    let cells = if parsed_cells.len() == expected_cells {
+        // All cells present; use orgize's parsed result directly.
+        parsed_cells
+    } else {
+        // Mismatch: reconstruct by matching parsed cells to raw positions.
+        let mut cells: Vec<Vec<InlineContent>> = Vec::new();
+        let mut parsed_idx = 0;
+        for i in 0..expected_cells {
+            let raw_cell = parts.get(i + 1).map(|s| s.trim()).unwrap_or("");
+            if raw_cell.is_empty() {
+                // Empty cell — orgize skipped it.
+                cells.push(vec![]);
+            } else if parsed_idx < parsed_cells.len() {
+                cells.push(parsed_cells[parsed_idx].clone());
+                parsed_idx += 1;
+            } else {
+                cells.push(vec![]);
+            }
+        }
+        cells
+    };
+
     TableRow {
         kind: TableRowKind::Standard { cells },
+        cell_widths,
     }
 }
 
@@ -1232,14 +1429,14 @@ fn convert_inline_node(node: &orgize::SyntaxNode) -> Option<InlineContent> {
 
     // Subscript
     if let Some(sub) = Subscript::cast(node.clone()) {
-        let contents = convert_emphasis_children(sub.syntax());
-        return Some(InlineContent::Subscript { contents });
+        let (contents, has_braces) = convert_subscript_children(sub.syntax());
+        return Some(InlineContent::Subscript { contents, use_braces: has_braces });
     }
 
     // Superscript
     if let Some(sup) = Superscript::cast(node.clone()) {
-        let contents = convert_emphasis_children(sup.syntax());
-        return Some(InlineContent::Superscript { contents });
+        let (contents, has_braces) = convert_subscript_children(sup.syntax());
+        return Some(InlineContent::Superscript { contents, use_braces: has_braces });
     }
 
     // For any inline node kind we do not handle, fall back to raw text.
@@ -1271,6 +1468,35 @@ fn convert_emphasis_children(syntax: &orgize::SyntaxNode) -> Vec<InlineContent> 
     }
 
     result
+}
+
+/// Convert the children of a subscript/superscript node.
+/// Unlike emphasis nodes (bold/italic) which have [marker, content..., marker],
+/// subscript/superscript nodes have [marker, content...] with no closing marker.
+/// The braced form `_{text}` vs bare form `_text` is determined by checking if
+/// the content starts with '{'.
+fn convert_subscript_children(syntax: &orgize::SyntaxNode) -> (Vec<InlineContent>, bool) {
+    let mut result = Vec::new();
+    let children: Vec<_> = syntax.children_with_tokens().collect();
+
+    if children.len() <= 1 {
+        return (result, false);
+    }
+
+    // Skip the first token (UNDERSCORE or CARET marker) and process the rest
+    for elem in &children[1..] {
+        collect_inline_from_element(elem, &mut result);
+    }
+
+    // Detect braced form by checking if the raw text starts with '{'
+    let raw_text = syntax.to_string();
+    let has_braces = if let Some(after_marker) = raw_text.chars().nth(1) {
+        after_marker == '{'
+    } else {
+        false
+    };
+
+    (result, has_braces)
 }
 
 /// For code/verbatim nodes that store a single TEXT token between markers,
@@ -1566,7 +1792,7 @@ mod tests {
                 let table = elements.iter().find(|e| matches!(e, Element::Table { .. }));
                 assert!(table.is_some());
                 match table.unwrap() {
-                    Element::Table { rows } => {
+                    Element::Table { rows, .. } => {
                         assert_eq!(rows.len(), 3);
                     }
                     _ => unreachable!(),

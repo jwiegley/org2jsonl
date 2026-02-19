@@ -71,6 +71,10 @@ pub struct Heading {
     /// Child headings
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub children: Vec<Heading>,
+    /// Number of blank lines after this heading (and all its descendants)
+    /// before the next sibling heading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_blank: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -129,7 +133,9 @@ pub enum Element {
     #[serde(rename = "drawer")]
     Drawer { name: String, value: String },
     #[serde(rename = "table")]
-    Table { rows: Vec<TableRow> },
+    Table {
+        rows: Vec<TableRow>,
+    },
     #[serde(rename = "horizontal_rule")]
     HorizontalRule,
     #[serde(rename = "keyword")]
@@ -186,10 +192,11 @@ pub struct ListItem {
     pub tag: Option<Vec<InlineContent>>,
     /// The content elements of this list item
     pub contents: Vec<Element>,
-    /// Whether this list item has blank lines between its sub-elements
-    /// (a "loose" list item in Org-mode terminology)
-    #[serde(skip_serializing_if = "is_false", default)]
-    pub has_blank_lines: bool,
+    /// Number of blank lines after each content element.
+    /// Length matches `contents`; each entry is the blank-line count
+    /// following that element.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub content_spacing: Vec<u32>,
     /// Number of blank lines after this list item
     #[serde(skip_serializing_if = "Option::is_none")]
     pub post_blank: Option<u32>,
@@ -207,6 +214,10 @@ pub enum CheckboxState {
 pub struct TableRow {
     #[serde(flatten)]
     pub kind: TableRowKind,
+    /// Per-cell widths for this row (content width excluding padding spaces).
+    /// Used to reproduce the original column widths on round-trip.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub cell_widths: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -271,7 +282,15 @@ pub enum InlineContent {
     #[serde(rename = "statistics_cookie")]
     StatisticsCookie { value: String },
     #[serde(rename = "subscript")]
-    Subscript { contents: Vec<InlineContent> },
+    Subscript {
+        contents: Vec<InlineContent>,
+        #[serde(skip_serializing_if = "is_false", default)]
+        use_braces: bool,
+    },
     #[serde(rename = "superscript")]
-    Superscript { contents: Vec<InlineContent> },
+    Superscript {
+        contents: Vec<InlineContent>,
+        #[serde(skip_serializing_if = "is_false", default)]
+        use_braces: bool,
+    },
 }

@@ -110,6 +110,11 @@ fn write_heading(buf: &mut String, heading: &Heading) {
     // --- Child headings ---
     for child in &heading.children {
         write_heading(buf, child);
+        // Emit post_blank blank lines after this child heading
+        let blank_count = child.post_blank.unwrap_or(0);
+        for _ in 0..blank_count {
+            buf.push('\n');
+        }
     }
 }
 
@@ -387,8 +392,11 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
             buf.push_str(&prefix);
             buf.push_str("#+");
             buf.push_str(key);
-            buf.push_str(": ");
-            buf.push_str(value);
+            buf.push(':');
+            if !value.is_empty() {
+                buf.push(' ');
+                buf.push_str(value);
+            }
             buf.push('\n');
         }
         Element::Comment { value } => {
@@ -447,8 +455,11 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
             buf.push_str(&prefix);
             buf.push_str("#+");
             buf.push_str(key);
-            buf.push_str(": ");
-            buf.push_str(value);
+            buf.push(':');
+            if !value.is_empty() {
+                buf.push(' ');
+                buf.push_str(value);
+            }
             buf.push('\n');
         }
         Element::LatexEnvironment { value } => {
@@ -619,20 +630,26 @@ fn write_list_item(buf: &mut String, item: &ListItem, base_indent: usize) {
 
     if let Some((first, rest)) = item.contents.split_first() {
         write_list_item_first_element(buf, first, body_indent);
-        let mut prev = first;
-        for elem in rest {
-            // Add a blank line between sub-elements when this is a "loose"
-            // list item (has_blank_lines), or between consecutive paragraphs
-            // (which always represent distinct paragraphs separated by blank
-            // lines in the source).
-            let needs_blank = item.has_blank_lines
-                || (matches!(prev, Element::Paragraph { .. })
-                    && matches!(elem, Element::Paragraph { .. }));
-            if needs_blank {
+        for (idx, elem) in rest.iter().enumerate() {
+            // idx is 0-based within `rest`, so the spacing index for the
+            // PREVIOUS element is `idx` (since rest starts at contents[1]).
+            let prev_spacing = item.content_spacing.get(idx).copied().unwrap_or(0);
+            // If the previous element had trailing blank lines, or if we're
+            // between consecutive paragraphs (which always have a separating
+            // blank line in Org-mode), emit blank lines.
+            let blank_count = if prev_spacing > 0 {
+                prev_spacing
+            } else if matches!(item.contents.get(idx), Some(Element::Paragraph { .. }))
+                && matches!(elem, Element::Paragraph { .. })
+            {
+                1
+            } else {
+                0
+            };
+            for _ in 0..blank_count {
                 buf.push('\n');
             }
-            write_element(buf, elem, body_indent);
-            prev = elem;
+            write_list_continuation_element(buf, elem, body_indent);
         }
     } else {
         // Empty item -- just end the line.
@@ -671,12 +688,19 @@ fn write_list_item_first_element(buf: &mut String, element: &Element, body_inden
                 // First line goes inline after the bullet
                 buf.push_str(first.trim_end());
                 buf.push('\n');
-                // Remaining lines are indented
+
+                // Remaining lines: strip ALL original indentation (orgize may
+                // preserve source indentation inconsistently across inline
+                // element boundaries), then add the canonical body_indent.
                 let indent_str = " ".repeat(body_indent);
                 for line in rest {
-                    buf.push_str(&indent_str);
-                    buf.push_str(line.trim_end());
-                    buf.push('\n');
+                    if line.trim().is_empty() {
+                        buf.push('\n');
+                    } else {
+                        buf.push_str(&indent_str);
+                        buf.push_str(line.trim_start().trim_end());
+                        buf.push('\n');
+                    }
                 }
             } else {
                 // Empty paragraph
@@ -692,71 +716,125 @@ fn write_list_item_first_element(buf: &mut String, element: &Element, body_inden
     }
 }
 
+/// Write a continuation element (not the first) inside a list item.
+///
+/// orgize preserves source indentation inside all element values (paragraphs,
+/// src blocks, etc.) within list items.  The writer needs to strip the
+/// original indentation and apply its own `body_indent` so indentation
+/// isn't doubled.
+///
+/// For paragraphs we strip all leading whitespace per line (orgize's inter-
+/// element whitespace is inconsistent across inline boundaries).  For all
+/// other elements we render with indent=0 into a temp buffer, measure
+/// the minimum leading whitespace, strip it, then re-indent.
+fn write_list_continuation_element(buf: &mut String, element: &Element, body_indent: usize) {
+    match element {
+        Element::Paragraph { contents } => {
+            let text = inline_to_string(contents);
+            let indent_str = " ".repeat(body_indent);
+            for line in text.lines() {
+                if line.trim().is_empty() {
+                    buf.push('\n');
+                } else {
+                    buf.push_str(&indent_str);
+                    buf.push_str(line.trim_start().trim_end());
+                    buf.push('\n');
+                }
+            }
+        }
+        _ => {
+            // Render with indent=0 to get the raw output with only orgize's
+            // preserved source indentation.
+            let mut tmp = String::new();
+            write_element(&mut tmp, element, 0);
+
+            // Find the minimum non-zero leading whitespace across non-empty lines.
+            let min_indent = tmp
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| l.len() - l.trim_start().len())
+                .min()
+                .unwrap_or(0);
+
+            // Re-indent each line: strip the common source indent, add body_indent.
+            let indent_str = " ".repeat(body_indent);
+            for line in tmp.lines() {
+                if line.trim().is_empty() {
+                    buf.push('\n');
+                } else {
+                    let stripped = if line.len() > min_indent {
+                        &line[min_indent..]
+                    } else {
+                        line.trim_start()
+                    };
+                    buf.push_str(&indent_str);
+                    buf.push_str(stripped);
+                    buf.push('\n');
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tables
 // ---------------------------------------------------------------------------
 
 /// Render an Org table.
 fn write_table(buf: &mut String, rows: &[TableRow], prefix: &str) {
-    // First pass: determine column widths for alignment.
-    let col_count = rows
-        .iter()
-        .filter_map(|r| match &r.kind {
-            TableRowKind::Standard { cells } => Some(cells.len()),
-            TableRowKind::Rule => None,
-        })
-        .max()
-        .unwrap_or(0);
+    // Track the most recent standard row's cell widths for rule rows
+    // (rule rows use the widths from the preceding/following standard row).
+    let mut last_standard_widths: Vec<usize> = Vec::new();
 
-    let mut col_widths = vec![0usize; col_count];
+    // Pre-compute: find first standard row's widths for rule rows that
+    // appear before any standard row.
     for row in rows {
-        if let TableRowKind::Standard { cells } = &row.kind {
-            for (i, cell) in cells.iter().enumerate() {
-                let w = inline_to_string(cell).len();
-                if i < col_widths.len() && w > col_widths[i] {
-                    col_widths[i] = w;
-                }
-            }
+        if let TableRowKind::Standard { .. } = &row.kind {
+            last_standard_widths = row_effective_widths(row);
+            break;
         }
     }
 
-    // Ensure minimum width of 1 for rule separators
-    for w in &mut col_widths {
-        if *w == 0 {
-            *w = 1;
-        }
-    }
+    let mut current_widths = last_standard_widths.clone();
 
-    // Second pass: render rows.
     for row in rows {
         buf.push_str(prefix);
         match &row.kind {
             TableRowKind::Standard { cells } => {
+                current_widths = row_effective_widths(row);
                 buf.push('|');
-                for (i, cell) in cells.iter().enumerate() {
-                    let text = inline_to_string(cell);
-                    let width = col_widths.get(i).copied().unwrap_or(text.len());
+                let num_cols = current_widths.len().max(cells.len());
+                for i in 0..num_cols {
+                    let text = cells
+                        .get(i)
+                        .map(|c| inline_to_string(c))
+                        .unwrap_or_default();
+                    let width = current_widths.get(i).copied().unwrap_or(text.len());
                     buf.push(' ');
                     buf.push_str(&text);
-                    // Pad to column width
                     let padding = width.saturating_sub(text.len());
                     for _ in 0..padding {
                         buf.push(' ');
                     }
                     buf.push_str(" |");
                 }
-                // If there are fewer cells than col_count, that is fine --
-                // Org allows ragged tables.
                 buf.push('\n');
             }
             TableRowKind::Rule => {
                 buf.push('|');
-                for (i, &w) in col_widths.iter().enumerate() {
-                    // +2 for the padding spaces on each side
+                // Use cell_widths from the row if available (measured from
+                // raw rule text), otherwise use widths from the preceding
+                // standard row.
+                let widths = if row.cell_widths.is_empty() {
+                    &current_widths
+                } else {
+                    &row.cell_widths
+                };
+                for (i, &w) in widths.iter().enumerate() {
                     for _ in 0..(w + 2) {
                         buf.push('-');
                     }
-                    if i + 1 < col_widths.len() {
+                    if i + 1 < widths.len() {
                         buf.push('+');
                     } else {
                         buf.push('|');
@@ -765,6 +843,26 @@ fn write_table(buf: &mut String, rows: &[TableRow], prefix: &str) {
                 buf.push('\n');
             }
         }
+    }
+}
+
+/// Get the effective cell widths for a table row.
+/// Uses stored cell_widths if available, otherwise computes from content.
+fn row_effective_widths(row: &TableRow) -> Vec<usize> {
+    if !row.cell_widths.is_empty() {
+        return row.cell_widths.clone();
+    }
+    // Fall back: compute from rendered content
+    if let TableRowKind::Standard { cells } = &row.kind {
+        cells
+            .iter()
+            .map(|c| {
+                let w = inline_to_string(c).len();
+                if w == 0 { 1 } else { w }
+            })
+            .collect()
+    } else {
+        vec![]
     }
 }
 
@@ -890,17 +988,25 @@ fn write_inline_content(buf: &mut String, content: &InlineContent) {
         InlineContent::StatisticsCookie { value } => {
             buf.push_str(value);
         }
-        InlineContent::Subscript { contents } => {
-            // Always use brace form _{...} for round-trip safety.
-            buf.push_str("_{");
-            write_inline(buf, contents);
-            buf.push('}');
+        InlineContent::Subscript { contents, use_braces } => {
+            if *use_braces {
+                buf.push_str("_{");
+                write_inline(buf, contents);
+                buf.push('}');
+            } else {
+                buf.push('_');
+                write_inline(buf, contents);
+            }
         }
-        InlineContent::Superscript { contents } => {
-            // Always use brace form ^{...} for round-trip safety.
-            buf.push_str("^{");
-            write_inline(buf, contents);
-            buf.push('}');
+        InlineContent::Superscript { contents, use_braces } => {
+            if *use_braces {
+                buf.push_str("^{");
+                write_inline(buf, contents);
+                buf.push('}');
+            } else {
+                buf.push('^');
+                write_inline(buf, contents);
+            }
         }
     }
 }
@@ -956,6 +1062,7 @@ mod tests {
             body: vec![],
             post_body_blank: None,
             children: vec![],
+            post_blank: None,
         }
     }
 
@@ -1134,14 +1241,17 @@ fn main() {}
                 kind: TableRowKind::Standard {
                     cells: vec![vec![text("Name")], vec![text("Age")]],
                 },
+                cell_widths: vec![5, 3],
             },
             TableRow {
                 kind: TableRowKind::Rule,
+                cell_widths: vec![5, 3],
             },
             TableRow {
                 kind: TableRowKind::Standard {
                     cells: vec![vec![text("Alice")], vec![text("30")]],
                 },
+                cell_widths: vec![5, 3],
             },
         ];
         let elem = Element::Table { rows };
@@ -1168,7 +1278,7 @@ fn main() {}
                 contents: vec![Element::Paragraph {
                     contents: vec![text("First")],
                 }],
-                has_blank_lines: false,
+                content_spacing: vec![],
                 post_blank: None,
             },
             ListItem {
@@ -1179,7 +1289,7 @@ fn main() {}
                 contents: vec![Element::Paragraph {
                     contents: vec![text("Second")],
                 }],
-                has_blank_lines: false,
+                content_spacing: vec![],
                 post_blank: None,
             },
         ];
@@ -1205,7 +1315,7 @@ fn main() {}
             contents: vec![Element::Paragraph {
                 contents: vec![text("Definition here")],
             }],
-            has_blank_lines: false,
+            content_spacing: vec![],
             post_blank: None,
         }];
         let elem = Element::PlainList {
@@ -1332,9 +1442,11 @@ fn main() {}
     fn superscript_and_subscript() {
         let sup = InlineContent::Superscript {
             contents: vec![text("2")],
+            use_braces: true,
         };
         let sub = InlineContent::Subscript {
             contents: vec![text("i")],
+            use_braces: true,
         };
         assert_eq!(inline_to_string(&[sup]), "^{2}");
         assert_eq!(inline_to_string(&[sub]), "_{i}");
@@ -1344,6 +1456,7 @@ fn main() {}
     fn superscript_complex() {
         let sup = InlineContent::Superscript {
             contents: vec![text("a + b")],
+            use_braces: true,
         };
         assert_eq!(inline_to_string(&[sup]), "^{a + b}");
     }
@@ -1452,6 +1565,7 @@ fn main() {}
             }],
             post_body_blank: None,
             children: vec![simple_heading(3, "Subtask")],
+            post_blank: None,
         };
         let e = entry(EntryContent::Heading(Box::new(h)));
         let expected = "\
@@ -1509,7 +1623,7 @@ Description of the task.
                             contents: vec![Element::Paragraph {
                                 contents: vec![text("Milk")],
                             }],
-                            has_blank_lines: false,
+                            content_spacing: vec![],
                 post_blank: None,
                         },
                         ListItem {
@@ -1520,13 +1634,14 @@ Description of the task.
                             contents: vec![Element::Paragraph {
                                 contents: vec![text("Eggs")],
                             }],
-                            has_blank_lines: false,
+                            content_spacing: vec![],
                 post_blank: None,
                         },
                     ],
                 }],
                 post_body_blank: None,
                 children: vec![],
+                post_blank: None,
             }))),
         ];
         // Run twice and verify identical output.
@@ -1733,7 +1848,7 @@ Description of the task.
                 contents: vec![Element::Paragraph {
                     contents: vec![text("First item")],
                 }],
-                has_blank_lines: false,
+                content_spacing: vec![],
                 post_blank: None,
             },
             ListItem {
@@ -1744,7 +1859,7 @@ Description of the task.
                 contents: vec![Element::Paragraph {
                     contents: vec![text("Second item")],
                 }],
-                has_blank_lines: false,
+                content_spacing: vec![],
                 post_blank: None,
             },
         ];
