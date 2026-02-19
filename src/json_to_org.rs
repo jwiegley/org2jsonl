@@ -3,11 +3,12 @@
 //! This module is deterministic -- the same [`OrgEntry`] slice always produces
 //! byte-identical output.  The output follows these canonical-form rules:
 //!
-//! * Single blank line between top-level headings
+//! * Blank lines between top-level entries controlled by `post_blank` field
+//!   (defaults to 1 blank line when absent)
 //! * No trailing whitespace on any line
 //! * Property drawers immediately after the heading (planning line in between
 //!   when present)
-//! * UTF-8, LF line endings, file ends with exactly one newline
+//! * UTF-8, LF line endings, file ends with at least one newline
 
 use crate::model::{
     CheckboxState, Element, EntryContent, Heading, InlineContent, ListItem, OrgEntry, Planning,
@@ -20,17 +21,26 @@ use crate::model::{
 
 /// Render a slice of [`OrgEntry`] values into canonical Org-mode text.
 ///
-/// Entries are separated by a single blank line when at least one of the
-/// adjacent entries is a heading.  The returned string always ends with
-/// exactly one newline.
+/// Inter-entry spacing is controlled by each entry's `post_blank` field.
+/// When absent, entries are separated by one blank line (default), and the
+/// last entry has zero trailing blank lines.  The returned string always
+/// ends with at least one newline.
 pub fn entries_to_org(entries: &[OrgEntry]) -> String {
     let mut buf = String::new();
     for (i, entry) in entries.iter().enumerate() {
-        if i > 0 {
-            // Blank line between entries
+        write_entry(&mut buf, entry);
+        // Emit post_blank blank lines after this entry
+        let blank_count = entry.post_blank.unwrap_or_else(|| {
+            // Default: 1 blank line between entries, 0 for the last entry
+            if i + 1 < entries.len() {
+                1
+            } else {
+                0
+            }
+        });
+        for _ in 0..blank_count {
             buf.push('\n');
         }
-        write_entry(&mut buf, entry);
     }
     ensure_final_newline(&mut buf);
     buf
@@ -75,19 +85,27 @@ fn write_heading(buf: &mut String, heading: &Heading) {
         write_properties(buf, &heading.properties);
     }
 
-    // --- Body elements ---
-    if !heading.body.is_empty() {
-        // Blank line between property drawer / planning and body content.
-        if !heading.properties.is_empty() || heading.planning.is_some() {
+    // --- Blank lines before body content ---
+    if let Some(count) = heading.pre_body_blank {
+        for _ in 0..count {
             buf.push('\n');
         }
+    }
+
+    // --- Body elements ---
+    if !heading.body.is_empty() {
         write_elements(buf, &heading.body, 0, false);
+    }
+
+    // --- Blank lines after body (before children or next sibling) ---
+    if let Some(count) = heading.post_body_blank {
+        for _ in 0..count {
+            buf.push('\n');
+        }
     }
 
     // --- Child headings ---
     for child in &heading.children {
-        // Blank line before each child heading
-        buf.push('\n');
         write_heading(buf, child);
     }
 }
@@ -136,18 +154,18 @@ fn write_heading_line(buf: &mut String, heading: &Heading) {
     buf.push('\n');
 }
 
-/// Render planning keywords.  Order: CLOSED, DEADLINE, SCHEDULED (standard
+/// Render planning keywords.  Order: SCHEDULED, DEADLINE, CLOSED (standard
 /// Org convention).
 fn write_planning(buf: &mut String, planning: &Planning) {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(ts) = &planning.closed {
-        parts.push(format!("CLOSED: {ts}"));
+    if let Some(ts) = &planning.scheduled {
+        parts.push(format!("SCHEDULED: {ts}"));
     }
     if let Some(ts) = &planning.deadline {
         parts.push(format!("DEADLINE: {ts}"));
     }
-    if let Some(ts) = &planning.scheduled {
-        parts.push(format!("SCHEDULED: {ts}"));
+    if let Some(ts) = &planning.closed {
+        parts.push(format!("CLOSED: {ts}"));
     }
     if !parts.is_empty() {
         buf.push_str(&parts.join(" "));
@@ -156,12 +174,26 @@ fn write_planning(buf: &mut String, planning: &Planning) {
 }
 
 /// Render a `:PROPERTIES:` drawer.
+/// Uses Emacs org-property-format convention: `:KEY:` portion is padded to 10 chars minimum.
 fn write_properties(buf: &mut String, properties: &[Property]) {
     buf.push_str(":PROPERTIES:\n");
     for prop in properties {
         buf.push(':');
         buf.push_str(&prop.key);
-        buf.push_str(": ");
+        buf.push(':');
+        // Emacs org-property-format: "%-10s %s" where the first %s is KEY:
+        // So KEY: is padded to 10 chars minimum
+        let key_colon_len = prop.key.len() + 2; // ":" + key + ":"
+        let pad_to = 10usize; // Emacs default
+        let padding = if key_colon_len < pad_to {
+            pad_to - key_colon_len
+        } else {
+            0
+        };
+        for _ in 0..padding {
+            buf.push(' ');
+        }
+        buf.push(' '); // always at least one space
         buf.push_str(&prop.value);
         buf.push('\n');
     }
@@ -172,6 +204,23 @@ fn write_properties(buf: &mut String, properties: &[Property]) {
 // Block-level elements
 // ---------------------------------------------------------------------------
 
+/// Check if an element is "light" (keyword-like) that doesn't need blank lines around it.
+fn is_light_element(elem: &Element) -> bool {
+    matches!(
+        elem,
+        Element::Keyword { .. } | Element::AffiliatedKeyword { .. } | Element::Raw { .. }
+    )
+}
+
+/// Determine if a blank line is needed between two consecutive elements.
+fn needs_blank_line_between(prev: &Element, next: &Element) -> bool {
+    // No blank line between consecutive light elements
+    if is_light_element(prev) && is_light_element(next) {
+        return false;
+    }
+    true
+}
+
 /// Write a sequence of elements, separated by blank lines.
 ///
 /// When `indent_contents` is true every line of every element is indented by
@@ -179,7 +228,10 @@ fn write_properties(buf: &mut String, properties: &[Property]) {
 fn write_elements(buf: &mut String, elements: &[Element], indent: usize, indent_contents: bool) {
     for (i, elem) in elements.iter().enumerate() {
         if i > 0 {
-            buf.push('\n');
+            let prev = &elements[i - 1];
+            if needs_blank_line_between(prev, elem) {
+                buf.push('\n');
+            }
         }
         if indent_contents {
             write_element_indented(buf, elem, indent);
@@ -541,16 +593,32 @@ fn write_list_item(buf: &mut String, item: &ListItem, base_indent: usize) {
     let body_indent = base_indent + bullet_body_indent(&item.bullet);
 
     if let Some((first, rest)) = item.contents.split_first() {
-        write_list_item_first_element(buf, first);
+        write_list_item_first_element(buf, first, body_indent);
+        let mut prev = first;
         for elem in rest {
-            // Blank line between sub-elements of a list item.
-            buf.push('\n');
+            // Add a blank line between consecutive paragraphs within a list
+            // item (these represent distinct paragraphs separated by blank
+            // lines in the source). Do NOT add blank lines before nested
+            // sub-lists — they follow the parent paragraph immediately.
+            if matches!(prev, Element::Paragraph { .. })
+                && matches!(elem, Element::Paragraph { .. })
+            {
+                buf.push('\n');
+            }
             write_element(buf, elem, body_indent);
+            prev = elem;
         }
     } else {
         // Empty item -- just end the line.
         trim_trailing_whitespace(buf);
         buf.push('\n');
+    }
+
+    // Emit post_blank blank lines
+    if let Some(count) = item.post_blank {
+        for _ in 0..count {
+            buf.push('\n');
+        }
     }
 }
 
@@ -567,13 +635,27 @@ fn bullet_body_indent(bullet: &str) -> usize {
 
 /// Write the first element of a list item *inline* (no preceding indentation
 /// or newline -- the bullet prefix is already in the buffer).
-fn write_list_item_first_element(buf: &mut String, element: &Element) {
+/// For multi-line paragraphs, continuation lines are indented to align with the first line.
+fn write_list_item_first_element(buf: &mut String, element: &Element, body_indent: usize) {
     match element {
         Element::Paragraph { contents } => {
             let text = inline_to_string(contents);
-            let trimmed = text.trim_end();
-            buf.push_str(trimmed);
-            buf.push('\n');
+            let lines: Vec<&str> = text.lines().collect();
+            if let Some((first, rest)) = lines.split_first() {
+                // First line goes inline after the bullet
+                buf.push_str(first.trim_end());
+                buf.push('\n');
+                // Remaining lines are indented
+                let indent_str = " ".repeat(body_indent);
+                for line in rest {
+                    buf.push_str(&indent_str);
+                    buf.push_str(line.trim_end());
+                    buf.push('\n');
+                }
+            } else {
+                // Empty paragraph
+                buf.push('\n');
+            }
         }
         _ => {
             // Non-paragraph first element: put it on the next line.
@@ -808,13 +890,11 @@ fn trim_trailing_whitespace(buf: &mut String) {
     buf.truncate(trimmed_len);
 }
 
-/// Make sure `buf` ends with exactly one `\n`.
+/// Make sure `buf` ends with at least one `\n`.
+///
+/// Trailing blank lines are preserved -- they are controlled by the
+/// `post_blank` field on the last entry.
 fn ensure_final_newline(buf: &mut String) {
-    // Remove trailing blank lines
-    while buf.ends_with("\n\n") {
-        buf.pop();
-    }
-    // Ensure at least one newline
     if !buf.ends_with('\n') {
         buf.push('\n');
     }
@@ -845,7 +925,9 @@ mod tests {
             tags: vec![],
             planning: None,
             properties: vec![],
+            pre_body_blank: None,
             body: vec![],
+            post_body_blank: None,
             children: vec![],
         }
     }
@@ -854,6 +936,7 @@ mod tests {
         OrgEntry {
             schema_version: SCHEMA_VERSION,
             content,
+            post_blank: None,
         }
     }
 
@@ -896,7 +979,7 @@ mod tests {
             ..simple_heading(1, "Planned")
         };
         let e = entry(EntryContent::Heading(Box::new(h)));
-        let expected = "* Planned\nDEADLINE: <2024-01-15> SCHEDULED: <2024-01-10>\n";
+        let expected = "* Planned\nSCHEDULED: <2024-01-10> DEADLINE: <2024-01-15>\n";
         assert_eq!(entry_to_org(&e), expected);
     }
 
@@ -919,8 +1002,8 @@ mod tests {
         let expected = "\
 * Props
 :PROPERTIES:
-:ID: abc-123
-:CUSTOM: val
+:ID:       abc-123
+:CUSTOM:   val
 :END:
 ";
         assert_eq!(entry_to_org(&e), expected);
@@ -947,7 +1030,7 @@ mod tests {
             ..simple_heading(1, "Parent")
         };
         let e = entry(EntryContent::Heading(Box::new(h)));
-        let expected = "* Parent\n\n** Child\n";
+        let expected = "* Parent\n** Child\n";
         assert_eq!(entry_to_org(&e), expected);
     }
 
@@ -1056,6 +1139,7 @@ fn main() {}
                 contents: vec![Element::Paragraph {
                     contents: vec![text("First")],
                 }],
+                post_blank: None,
             },
             ListItem {
                 bullet: "-".into(),
@@ -1065,6 +1149,7 @@ fn main() {}
                 contents: vec![Element::Paragraph {
                     contents: vec![text("Second")],
                 }],
+                post_blank: None,
             },
         ];
         let elem = Element::PlainList {
@@ -1088,6 +1173,7 @@ fn main() {}
             contents: vec![Element::Paragraph {
                 contents: vec![text("Definition here")],
             }],
+            post_blank: None,
         }];
         let elem = Element::PlainList {
             kind: ListKind::Descriptive,
@@ -1316,21 +1402,21 @@ fn main() {}
                 key: "ID".into(),
                 value: "task-42".into(),
             }],
+            pre_body_blank: None,
             body: vec![Element::Paragraph {
                 contents: vec![text("Description of the task.")],
             }],
+            post_body_blank: None,
             children: vec![simple_heading(3, "Subtask")],
         };
         let e = entry(EntryContent::Heading(Box::new(h)));
         let expected = "\
 ** TODO [#B] Complete task :project:review:
-CLOSED: [2024-01-20 Sat 14:00] DEADLINE: <2024-01-18>
+DEADLINE: <2024-01-18> CLOSED: [2024-01-20 Sat 14:00]
 :PROPERTIES:
-:ID: task-42
+:ID:       task-42
 :END:
-
 Description of the task.
-
 *** Subtask
 ";
         assert_eq!(entry_to_org(&e), expected);
@@ -1365,6 +1451,7 @@ Description of the task.
                     key: "EFFORT".into(),
                     value: "1:00".into(),
                 }],
+                pre_body_blank: None,
                 body: vec![Element::PlainList {
                     kind: ListKind::Unordered,
                     items: vec![
@@ -1376,6 +1463,7 @@ Description of the task.
                             contents: vec![Element::Paragraph {
                                 contents: vec![text("Milk")],
                             }],
+                            post_blank: None,
                         },
                         ListItem {
                             bullet: "-".into(),
@@ -1385,9 +1473,11 @@ Description of the task.
                             contents: vec![Element::Paragraph {
                                 contents: vec![text("Eggs")],
                             }],
+                            post_blank: None,
                         },
                     ],
                 }],
+                post_body_blank: None,
                 children: vec![],
             }))),
         ];
@@ -1399,7 +1489,7 @@ Description of the task.
         assert!(out1.contains("#+TITLE: Test"));
         assert!(out1.contains("* TODO [#A] Buy *groceries* :errand:"));
         assert!(out1.contains("DEADLINE: <2024-03-01>"));
-        assert!(out1.contains(":EFFORT: 1:00"));
+        assert!(out1.contains(":EFFORT:   1:00"));
         assert!(out1.contains("- [ ] Milk"));
         assert!(out1.contains("- [X] Eggs"));
         assert!(out1.ends_with('\n'));
@@ -1585,6 +1675,7 @@ Description of the task.
                 contents: vec![Element::Paragraph {
                     contents: vec![text("First item")],
                 }],
+                post_blank: None,
             },
             ListItem {
                 bullet: "2.".into(),
@@ -1594,6 +1685,7 @@ Description of the task.
                 contents: vec![Element::Paragraph {
                     contents: vec![text("Second item")],
                 }],
+                post_blank: None,
             },
         ];
         let elem = Element::PlainList {

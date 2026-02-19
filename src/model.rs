@@ -9,6 +9,9 @@ pub struct OrgEntry {
     /// The type of this entry
     #[serde(flatten)]
     pub content: EntryContent,
+    /// Number of blank lines after this entry (before the next entry)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_blank: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,9 +46,15 @@ pub struct Heading {
     /// Property drawer
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub properties: Vec<Property>,
+    /// Number of blank lines between heading metadata and body content
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_body_blank: Option<u32>,
     /// Body elements of this heading's section
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub body: Vec<Element>,
+    /// Number of blank lines after body content (before first child heading)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_body_blank: Option<u32>,
     /// Child headings
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub children: Vec<Heading>,
@@ -164,6 +173,9 @@ pub struct ListItem {
     pub tag: Option<Vec<InlineContent>>,
     /// The content elements of this list item
     pub contents: Vec<Element>,
+    /// Number of blank lines after this list item
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_blank: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

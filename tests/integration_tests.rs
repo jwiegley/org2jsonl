@@ -91,12 +91,8 @@ macro_rules! fixture_test {
             #[test]
             fn round_trip_produces_valid_output() {
                 let output = round_trip(FIXTURE);
-                // Output must end with exactly one newline
+                // Output must end with at least one newline
                 assert!(output.ends_with('\n'), "output should end with newline");
-                assert!(
-                    !output.ends_with("\n\n"),
-                    "output should not end with double newline"
-                );
             }
 
             #[test]
@@ -1531,7 +1527,7 @@ Child body.
 }
 
 #[test]
-fn entries_to_org_ends_with_single_newline() {
+fn entries_to_org_ends_with_newline() {
     let cases = vec![
         "* Heading\n",
         "* H1\n\n* H2\n",
@@ -1543,10 +1539,6 @@ fn entries_to_org_ends_with_single_newline() {
         assert!(
             output.ends_with('\n'),
             "Output does not end with newline for input: {input:?}"
-        );
-        assert!(
-            !output.ends_with("\n\n"),
-            "Output ends with double newline for input: {input:?}"
         );
     }
 }

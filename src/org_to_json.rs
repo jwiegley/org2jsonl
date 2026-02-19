@@ -31,24 +31,71 @@ pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
     let org = Org::parse(input);
     let doc = org.document();
     let mut entries = Vec::new();
+    let mut raw_texts: Vec<String> = Vec::new();
 
     // Zeroth section: content before the first heading.
     if let Some(section) = doc.section() {
-        let elements = convert_section_elements(&section);
+        let raw = section.syntax().to_string();
+        let mut elements = Vec::new();
+
+        // Check for file-level property drawer in document syntax (before section)
+        // The property drawer may be a direct child of the Document node
+        for child in doc.syntax().children() {
+            if child.kind() == SyntaxKind::PROPERTY_DRAWER {
+                // Found a file-level property drawer
+                elements.push(Element::Raw {
+                    value: child.to_string(),
+                });
+                break; // Only one property drawer at file level
+            } else if child.kind() == SyntaxKind::SECTION {
+                // Once we hit the section, stop looking
+                break;
+            }
+        }
+
+        // Add section elements
+        elements.extend(convert_section_elements(&section));
+
         if !elements.is_empty() {
             entries.push(OrgEntry {
                 schema_version: SCHEMA_VERSION,
                 content: EntryContent::Section { elements },
+                post_blank: None,
             });
+            raw_texts.push(raw);
         }
     }
 
     // Each top-level (level-1) heading becomes its own entry.
     for headline in doc.headlines() {
+        let raw = headline.syntax().to_string();
         entries.push(OrgEntry {
             schema_version: SCHEMA_VERSION,
-            content: EntryContent::Heading(Box::new(convert_headline(&headline))),
+            content: EntryContent::Heading(Box::new(convert_headline(&headline, true))),
+            post_blank: None,
         });
+        raw_texts.push(raw);
+    }
+
+    // Calculate post_blank from trailing newlines in each top-level structure's
+    // raw text.  In orgize's AST, a top-level headline's syntax text includes
+    // all sub-headlines, so trailing newlines at the very end correspond to
+    // blank lines between this entry and the next (or trailing EOF blanks for
+    // the last entry).
+    for (i, entry) in entries.iter_mut().enumerate() {
+        if i < raw_texts.len() {
+            let raw = &raw_texts[i];
+            let trailing_newlines = raw.bytes().rev().take_while(|&b| b == b'\n').count();
+            // Subtract 1 for the mandatory newline at end of the last line
+            let blank_count = if trailing_newlines > 1 {
+                (trailing_newlines - 1) as u32
+            } else {
+                0
+            };
+            if blank_count > 0 {
+                entry.post_blank = Some(blank_count);
+            }
+        }
     }
 
     entries
@@ -58,7 +105,7 @@ pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
 // Headline conversion
 // ---------------------------------------------------------------------------
 
-fn convert_headline(hl: &Headline) -> Heading {
+fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
     let level = hl.level() as u32;
     let keyword = hl.todo_keyword().map(|t| t.to_string());
     let priority = hl.priority().map(|t| t.to_string());
@@ -68,15 +115,133 @@ fn convert_headline(hl: &Headline) -> Heading {
     let planning = hl.planning().map(|p| convert_planning(&p));
     let properties = hl.properties().map(convert_properties).unwrap_or_default();
 
-    let body = hl
-        .section()
-        .map(|s| convert_section_elements(&s))
-        .unwrap_or_default();
+    // Detect pre_body_blank from two possible sources:
+    //
+    // 1. Trailing BLANK_LINE tokens inside the PROPERTY_DRAWER (orgize absorbs
+    //    blank lines after :END: into the property drawer node).
+    // 2. Leading empty paragraphs in the section (orgize wraps blank lines
+    //    between heading and body in PARAGRAPH nodes containing only a
+    //    BLANK_LINE token).
+    let mut pre_blank_count = 0u32;
+
+    // Source 1: trailing BLANK_LINE tokens in the property drawer
+    for child in hl.syntax().children() {
+        if child.kind() == SyntaxKind::PROPERTY_DRAWER {
+            for tok in child.children_with_tokens().collect::<Vec<_>>().into_iter().rev() {
+                if let orgize::rowan::NodeOrToken::Token(t) = tok {
+                    if t.kind() == SyntaxKind::BLANK_LINE {
+                        pre_blank_count += 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    let (section_leading_blanks, section_trailing_blanks, body) = if let Some(section) =
+        hl.section()
+    {
+        let section_children: Vec<_> = section.syntax().children().collect();
+
+        // Source 2: leading empty paragraphs in the section
+        let mut leading = 0u32;
+        for child in &section_children {
+            if is_blank_paragraph(child) {
+                leading += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Trailing blank lines in the section come from two sources:
+        //
+        // A) Separate empty PARAGRAPH nodes (containing only BLANK_LINE
+        //    tokens) at the end of the section.
+        // B) Trailing BLANK_LINE tokens inside the last real PARAGRAPH
+        //    (orgize sometimes folds blank lines into the preceding
+        //    paragraph rather than creating a separate node).
+        let mut trailing = 0u32;
+
+        // Source A: trailing empty paragraphs
+        for child in section_children.iter().rev() {
+            if is_blank_paragraph(child) {
+                trailing += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Source B: trailing BLANK_LINE tokens in the last non-blank child
+        if trailing == 0 {
+            if let Some(last) = section_children.last() {
+                if last.kind() == SyntaxKind::PARAGRAPH && !is_blank_paragraph(last) {
+                    for tok in last.children_with_tokens().collect::<Vec<_>>().into_iter().rev()
+                    {
+                        if let orgize::rowan::NodeOrToken::Token(t) = tok {
+                            if t.kind() == SyntaxKind::BLANK_LINE {
+                                trailing += 1;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If the section only has blank paragraphs, they are ALL leading
+        // (pre_body_blank); don't double-count them as trailing.
+        let total = section_children.len() as u32;
+        if leading + trailing >= total {
+            trailing = 0;
+        }
+
+        let elements = convert_section_elements(&section);
+        (leading, trailing, elements)
+    } else {
+        (0, 0, vec![])
+    };
 
     let children: Vec<Heading> = hl
         .headlines()
-        .map(|child| convert_headline(&child))
+        .map(|child| convert_headline(&child, false))
         .collect();
+
+    // Only treat the blank lines as pre_body_blank when there is actual
+    // body content or child headings after them.  When both body and
+    // children are empty, the blanks are trailing inter-entry spacing
+    // already captured by the entry-level post_blank calculation.
+    let pre_body_blank = if !body.is_empty() || !children.is_empty() {
+        pre_blank_count += section_leading_blanks;
+        if pre_blank_count > 0 {
+            Some(pre_blank_count)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Trailing blank lines in the section represent spacing after the
+    // body content (before the first child heading or next sibling).
+    //
+    // For entry-level (top-level) headings WITHOUT children, trailing
+    // blanks are inter-entry spacing already captured by the entry-level
+    // post_blank — don't double-count them.  For all other cases (child
+    // headings, or entry-level headings with children), track them.
+    let post_body_blank = if section_trailing_blanks > 0
+        && (!is_entry_level || !children.is_empty())
+    {
+        Some(section_trailing_blanks)
+    } else {
+        None
+    };
 
     Heading {
         level,
@@ -86,7 +251,9 @@ fn convert_headline(hl: &Headline) -> Heading {
         tags,
         planning,
         properties,
+        pre_body_blank,
         body,
+        post_body_blank,
         children,
     }
 }
@@ -128,6 +295,19 @@ fn convert_properties(pd: orgize::ast::PropertyDrawer) -> Vec<Property> {
 // ---------------------------------------------------------------------------
 // Section -> Vec<Element>
 // ---------------------------------------------------------------------------
+
+/// Check if a syntax node is a PARAGRAPH that contains only BLANK_LINE tokens
+/// (i.e., an "empty paragraph" that represents a blank line in the source).
+fn is_blank_paragraph(node: &orgize::SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::PARAGRAPH
+        && node.children_with_tokens().all(|c| {
+            matches!(
+                c,
+                orgize::rowan::NodeOrToken::Token(ref t)
+                    if t.kind() == SyntaxKind::BLANK_LINE
+            )
+        })
+}
 
 /// Convert the children of a `Section` node into our `Element` model.
 ///
@@ -293,9 +473,9 @@ fn convert_block_element(node: &orgize::SyntaxNode) -> Option<Element> {
         });
     }
 
-    // Property drawer appearing in zeroth section
+    // Property drawer appearing in zeroth section (file-level properties)
     if kind == SyntaxKind::PROPERTY_DRAWER {
-        // Property drawers inside sections are unusual; emit as raw.
+        // File-level property drawers should be preserved as raw text
         return Some(Element::Raw {
             value: node.to_string(),
         });
@@ -340,7 +520,39 @@ fn convert_list(list: &List) -> Element {
         ListKind::Unordered
     };
 
-    let items: Vec<ListItem> = list.items().map(|item| convert_list_item(&item)).collect();
+    // Convert items and detect post_blank from trailing newlines in raw text.
+    //
+    // In orgize's AST, blank lines between list items are included as
+    // trailing newlines in the preceding LIST_ITEM's raw text (often buried
+    // inside the last nested descendant). We count trailing '\n' characters
+    // and subtract 1 (the mandatory line-ending newline).
+    //
+    // For the LAST item in a list, we always set post_blank = 0 because any
+    // trailing blank lines belong to the parent level (the parent list item
+    // or the element-level spacing), not to this item.
+    let item_nodes: Vec<_> = list.items().collect();
+    let item_count = item_nodes.len();
+    let items: Vec<ListItem> = item_nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let mut li = convert_list_item(item);
+            let is_last = idx + 1 == item_count;
+            if !is_last {
+                let text = item.syntax().to_string();
+                let trailing_newlines = text.bytes().rev().take_while(|&b| b == b'\n').count();
+                let blank_count = if trailing_newlines > 1 {
+                    (trailing_newlines - 1) as u32
+                } else {
+                    0
+                };
+                if blank_count > 0 {
+                    li.post_blank = Some(blank_count);
+                }
+            }
+            li
+        })
+        .collect();
 
     Element::PlainList { kind, items }
 }
@@ -391,6 +603,7 @@ fn convert_list_item(item: &OrgListItem) -> ListItem {
         counter_set,
         tag,
         contents,
+        post_blank: None,
     }
 }
 
@@ -440,15 +653,78 @@ fn strip_list_item_indentation(el: Element) -> Element {
 }
 
 /// Strip leading whitespace from the first Text element in a list of
-/// inline content.
+/// inline content, and from Text elements that follow LineBreak elements.
 fn strip_leading_whitespace(mut contents: Vec<InlineContent>) -> Vec<InlineContent> {
+    // Strip leading whitespace from first element
     if let Some(InlineContent::Text { value }) = contents.first_mut() {
         *value = value.trim_start().to_string();
         if value.is_empty() {
             contents.remove(0);
         }
     }
+
+    // Strip leading whitespace from text elements that follow LineBreak
+    let mut i = 0;
+    while i < contents.len() {
+        if matches!(contents[i], InlineContent::LineBreak) {
+            // Check if next element is a Text element
+            if i + 1 < contents.len() {
+                if let InlineContent::Text { value } = &mut contents[i + 1] {
+                    *value = value.trim_start().to_string();
+                    if value.is_empty() {
+                        contents.remove(i + 1);
+                        continue; // Don't increment i
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Also dedent multi-line text elements
+    for item in &mut contents {
+        if let InlineContent::Text { value } = item {
+            *value = dedent_text(value);
+        }
+    }
     contents
+}
+
+/// Dedent continuation lines in multi-line text.
+fn dedent_text(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() <= 1 {
+        return text.to_string();
+    }
+
+    // Find minimum indentation of non-empty continuation lines (excluding first line)
+    let min_indent = lines[1..]
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    if min_indent == 0 {
+        return text.to_string();
+    }
+
+    let mut result = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        if i == 0 {
+            result.push_str(line);
+        } else if line.trim().is_empty() {
+            // Keep empty lines as-is (already added just '\n')
+        } else if line.len() >= min_indent {
+            result.push_str(&line[min_indent..]);
+        } else {
+            result.push_str(line);
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
