@@ -3,7 +3,7 @@ name = "org2jsonl"
 version = "0.1.0"
 edition = "2021"
 description = "Convert Emacs Org-mode files to/from JSONL for manipulation with standard JSON tools"
-license = "MIT"
+license = "BSD-3-Clause"
 authors = ["John Wiegley <johnw@newartisans.com>"]
 
 [dependencies]
