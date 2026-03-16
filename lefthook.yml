@@ -1,0 +1,29 @@
+pre-commit:
+  parallel: true
+  commands:
+    fmt-check:
+      glob: "*.rs"
+      run: cargo fmt -- --check
+    clippy:
+      glob: "*.{rs,toml}"
+      run: cargo clippy --all-targets -- -D warnings
+    test:
+      glob: "*.{rs,org,toml}"
+      run: cargo test --quiet
+    doc-check:
+      glob: "*.rs"
+      env:
+        RUSTDOCFLAGS: -D warnings
+      run: cargo doc --no-deps
+    coverage-check:
+      glob: "*.{rs,org,toml}"
+      run: >-
+        cargo llvm-cov test
+        --ignore-filename-regex 'tests/.*|benches/.*|examples/.*|bin/.*'
+        --fail-under-lines 89
+    bench-regression:
+      glob: "*.{rs,toml}"
+      run: scripts/bench-check.sh
+    nix-check:
+      glob: "*.{rs,nix,toml}"
+      run: nix flake check --no-warn-dirty 2>&1
