@@ -17,6 +17,7 @@ anyhow = "1"
 proptest = "1"
 pretty_assertions = "1"
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bin]]
 name = "org2jsonl"
@@ -25,3 +26,15 @@ path = "src/bin/org2jsonl.rs"
 [[bin]]
 name = "jsonl2org"
 path = "src/bin/jsonl2org.rs"
+
+[[bench]]
+name = "roundtrip"
+path = "benches/bench_roundtrip.rs"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+debug = true
