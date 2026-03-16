@@ -26,12 +26,10 @@
         };
 
         # Override crane's default toolchain with our rust-overlay toolchain.
-        # Using a function form for proper cross-compilation support.
         craneLib = (crane.mkLib pkgs).overrideToolchain (_: rustToolchain);
 
-        # Custom source filter: include Rust-relevant files (via crane's
-        # default filter) plus .org files needed by integration tests
-        # (they are embedded at compile time via include_str!).
+        # Custom source filter: include Rust-relevant files plus .org files
+        # needed by integration tests (embedded at compile time via include_str!).
         orgFilter = path: _type: builtins.match ".*\\.org$" path != null;
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
@@ -39,8 +37,7 @@
             (orgFilter path type) || (craneLib.filterCargoSources path type);
         };
 
-        # Common arguments shared across all crane derivations to ensure
-        # consistency between dependency builds, checks, and the final package.
+        # Common arguments shared across all crane derivations.
         commonArgs = {
           inherit src;
           strictDeps = true;
@@ -53,8 +50,7 @@
         };
 
         # Build only the cargo dependencies as a separate derivation.
-        # This is cached independently so that source-only changes do not
-        # trigger a full dependency rebuild.
+        # Cached independently so source-only changes skip dependency rebuild.
         cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
           pname = "org2jsonl-deps";
         });
@@ -62,27 +58,35 @@
         # Build the full package (both org2jsonl and jsonl2org binaries).
         org2jsonl = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
-          # cargo builds all [[bin]] targets by default, so both
-          # org2jsonl and jsonl2org will be present in the output.
         });
 
-        # Clippy lint check -- runs against the full source, reusing
-        # the pre-built dependency artifacts for speed.
+        # Run all tests.
+        tests = craneLib.cargoTest (commonArgs // {
+          inherit cargoArtifacts;
+        });
+
+        # Clippy lint check -- all warnings are errors.
         clippy = craneLib.cargoClippy (commonArgs // {
           inherit cargoArtifacts;
           cargoClippyExtraArgs = "--all-targets -- --deny warnings";
         });
 
-        # Rustfmt formatting check -- ensures consistent code style.
-        # Does not need cargoArtifacts since it only parses source.
+        # Rustfmt formatting check.
         fmt = craneLib.cargoFmt {
           inherit src;
         };
+
+        # Documentation build -- warnings are errors.
+        doc = craneLib.cargoDoc (commonArgs // {
+          inherit cargoArtifacts;
+          cargoDocExtraArgs = "--no-deps";
+          RUSTDOCFLAGS = "-D warnings";
+        });
       in
       {
-        # `nix flake check` runs clippy, fmt, and a full build.
+        # `nix flake check` runs build, tests, clippy, fmt, and doc checks.
         checks = {
-          inherit org2jsonl clippy fmt;
+          inherit org2jsonl tests clippy fmt doc;
         };
 
         packages = {
@@ -91,16 +95,14 @@
         };
 
         # Development shell with the Rust toolchain and common tools.
-        # craneLib.devShell automatically includes cargo, rustc, and
-        # any other binaries from the overridden toolchain.
         devShells.default = craneLib.devShell {
-          # Propagate checks so that `inputsFrom` picks up their
-          # build inputs (ensures native deps are available in the shell).
           checks = self.checks.${system};
 
           packages = with pkgs; [
             rust-analyzer
             cargo-llvm-cov
+            critcmp
+            lefthook
           ];
         };
       });
