@@ -1,25 +1,19 @@
 # org2jsonl
 
-Convert Emacs Org-mode files to and from JSONL (JSON Lines) for manipulation
-with standard JSON tools.
+I've often wanted to manipulate my Org-mode files with standard JSON tools --
+jq, custom scripts, that sort of thing. org2jsonl is what I came up with: a
+pair of Rust command-line tools and a library for lossless conversion between
+Org-mode and JSONL (JSON Lines).
 
-## Overview
-
-org2jsonl provides two command-line tools and a Rust library for lossless
-conversion between Org-mode and JSONL:
-
-- **`org2jsonl`** -- parse an Org-mode file into one JSON object per
-  top-level heading
-- **`jsonl2org`** -- reconstruct canonical Org-mode text from JSONL
-
-The conversion forms an *adjunction*: a first round-trip through JSONL may
-normalize non-standard formatting (trailing whitespace, inconsistent
-indentation), but every subsequent round-trip is byte-identical. Well-formatted
-Org-mode files round-trip with zero changes.
+The conversion is designed to be lossless. It forms what I'd call an
+*adjunction*: the first round-trip through JSONL may normalize things like
+trailing whitespace or inconsistent indentation, but every round-trip after
+that is byte-identical. If your Org files are already well-formatted, the
+first round-trip won't change them either.
 
 ## Installation
 
-### With Nix (recommended)
+### With Nix
 
 ```sh
 nix build    # produces result/bin/org2jsonl and result/bin/jsonl2org
@@ -34,7 +28,7 @@ cargo install --path .
 
 This installs both `org2jsonl` and `jsonl2org` into your Cargo bin directory.
 
-## Command-Line Usage
+## Usage
 
 ### org2jsonl
 
@@ -56,13 +50,16 @@ cat notes.jsonl | jsonl2org > notes.org       # or read from stdin
 jsonl2org notes.jsonl --output restored.org   # write to a file
 ```
 
-### Piping together
+### Piping the two together
+
+Here's where it gets interesting. Since the intermediate format is just JSON,
+you can use jq or any other JSON tool to transform your Org files:
 
 ```sh
 # Round-trip: should produce no diff on well-formatted files
 diff notes.org <(org2jsonl notes.org | jsonl2org)
 
-# Extract all TODO headings using jq
+# Extract all TODO headings
 org2jsonl notes.org | jq 'select(.content.heading.keyword == "TODO")'
 
 # Change all TODO keywords to DONE
@@ -80,19 +77,19 @@ org2jsonl notes.org \
 
 ## JSONL Format
 
-Each line of the JSONL output is a self-contained JSON object representing one
-top-level entry. There are two entry types:
+Each line of the JSONL output is a self-contained JSON object. There are two
+types of entry:
 
-### Section (content before the first heading)
+**Section** -- content that appears before the first heading:
 
 ```json
 {"schema_version":1,"type":"section","elements":[...]}
 ```
 
-### Heading (a top-level heading with all nested content)
+**Heading** -- a top-level heading with all its nested content:
 
 ```json
-{"schema_version":1,"type":"heading","level":1,"title":[{"type":"text","value":"My Heading"}],"keyword":"TODO","tags":["work"],"body":[...],"children":[...]}
+{"schema_version":1,"type":"heading","level":1,"title":[{"type":"text","value":"My Heading"}],...}
 ```
 
 Key fields on headings:
@@ -109,10 +106,10 @@ Key fields on headings:
 | `body` | element[] | Block-level body elements |
 | `children` | heading[] | Nested child headings |
 
-The full schema supports all Org-mode element and object types including
-paragraphs, lists, tables, source blocks, drawers, timestamps, inline markup
-(bold, italic, code, links, etc.), footnotes, LaTeX fragments, and more. See
-`src/model.rs` for the complete type definitions.
+The full schema covers all Org-mode element and object types -- paragraphs,
+lists, tables, source blocks, drawers, timestamps, inline markup, footnotes,
+LaTeX fragments, and more. See `src/model.rs` for the complete type
+definitions.
 
 ## Library Usage
 
@@ -132,7 +129,6 @@ use org2jsonl::org_to_json::org_to_entries;
 let input = "* TODO Buy groceries\nSCHEDULED: <2025-01-15>\n- [ ] Milk\n- [X] Eggs\n";
 let entries = org_to_entries(input);
 
-// Each entry is an OrgEntry with schema_version and content
 for entry in &entries {
     println!("{}", serde_json::to_string_pretty(entry).unwrap());
 }
@@ -144,7 +140,6 @@ for entry in &entries {
 use org2jsonl::json_to_org::entries_to_org;
 
 let org_text = entries_to_org(&entries);
-// org_text is canonical Org-mode text with consistent formatting
 ```
 
 ### Full round-trip through JSON
@@ -177,17 +172,17 @@ let output = entries_to_org(&recovered);
 | Module | Description |
 |--------|-------------|
 | `org2jsonl::org_to_json` | Parse Org-mode text into `Vec<OrgEntry>` |
-| `org2jsonl::json_to_org` | Render `&[OrgEntry]` back into Org-mode text |
-| `org2jsonl::model` | All data types (`OrgEntry`, `Heading`, `Element`, `InlineContent`, etc.) |
+| `org2jsonl::json_to_org` | Render `&[OrgEntry]` back to Org-mode text |
+| `org2jsonl::model` | All data types (`OrgEntry`, `Heading`, `Element`, etc.) |
 
 ## Canonical Form
 
 The `jsonl2org` output follows a canonical form:
 
 - No trailing whitespace on any line
-- Property drawers immediately after the heading line (with planning in between
-  when present)
-- UTF-8 encoding, LF line endings
+- Property drawers immediately after the heading line (with planning in
+  between when present)
+- UTF-8, LF line endings
 - File ends with exactly one newline
 - Blank lines between entries controlled by the `post_blank` field
 
@@ -197,8 +192,22 @@ The `jsonl2org` output follows a canonical form:
 nix develop              # enter the dev shell
 cargo test               # run all tests (unit + integration + property-based)
 cargo clippy -- -D warnings
-cargo doc --no-deps      # generate API documentation
+cargo bench              # run benchmarks
+cargo doc --no-deps      # generate API docs
+nix flake check          # run all checks (build, test, clippy, fmt, doc)
 ```
+
+### Pre-commit hooks
+
+This project uses [lefthook](https://github.com/evilmartians/lefthook) for
+pre-commit checks. Install the hooks with:
+
+```sh
+lefthook install
+```
+
+The hooks run formatting, linting, tests, coverage, documentation, benchmark
+regression, and Nix build checks -- all in parallel.
 
 ### Project structure
 
@@ -212,9 +221,13 @@ src/
     org2jsonl.rs  -- CLI: Org -> JSONL
     jsonl2org.rs  -- CLI: JSONL -> Org
 tests/
-  integration_tests.rs  -- round-trip, idempotency, and fixture tests
+  integration_tests.rs  -- round-trip, idempotency, fixture, and property-based tests
+benches/
+  bench_roundtrip.rs    -- criterion benchmarks for parse/write/round-trip
+fuzz/
+  fuzz_targets/         -- cargo-fuzz targets for parser fuzzing
 ```
 
 ## License
 
-MIT
+BSD-3-Clause -- see [LICENSE.md](LICENSE.md) for details.
