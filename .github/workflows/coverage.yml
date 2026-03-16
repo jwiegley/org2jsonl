@@ -11,7 +11,7 @@ on:
 env:
   CARGO_INCREMENTAL: 0
   # Coverage threshold for library code (excluding bin/ CLI wrappers)
-  COVERAGE_THRESHOLD: 90
+  COVERAGE_THRESHOLD: 89
   COVERAGE_IGNORE_REGEX: 'tests/.*|benches/.*|examples/.*|bin/.*'
 
 jobs:

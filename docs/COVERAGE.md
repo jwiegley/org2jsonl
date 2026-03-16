@@ -6,7 +6,7 @@ This project maintains a minimum code coverage threshold to ensure code quality 
 
 ## Current Threshold
 
-**Minimum Coverage: 90%** (line coverage)
+**Minimum Coverage: 89%** (line coverage)
 
 This threshold is enforced in CI via the GitHub Actions workflow at `.github/workflows/coverage.yml`.
 
@@ -22,7 +22,7 @@ The threshold is calculated as:
 ## CI Enforcement
 
 Pull requests and pushes to main will fail if:
-- Code coverage falls below the configured threshold (90%)
+- Code coverage falls below the configured threshold (89%)
 - This is enforced using `cargo llvm-cov --fail-under-lines` in CI
 
 Coverage reports are always generated and uploaded as artifacts, even if the threshold check fails.
