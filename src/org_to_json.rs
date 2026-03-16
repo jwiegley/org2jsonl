@@ -42,11 +42,13 @@ pub fn org_to_entries_with_keywords(
     todo_keywords: &[&str],
     done_keywords: &[&str],
 ) -> Vec<OrgEntry> {
-    let mut config = ParseConfig::default();
-    config.todo_keywords = (
-        todo_keywords.iter().map(|s| (*s).to_string()).collect(),
-        done_keywords.iter().map(|s| (*s).to_string()).collect(),
-    );
+    let config = ParseConfig {
+        todo_keywords: (
+            todo_keywords.iter().map(|s| (*s).to_string()).collect(),
+            done_keywords.iter().map(|s| (*s).to_string()).collect(),
+        ),
+        ..Default::default()
+    };
     let org = config.parse(input);
     org_to_entries_from_parsed(org)
 }
@@ -188,7 +190,12 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
     // Source 1: trailing BLANK_LINE tokens in the property drawer
     for child in hl.syntax().children() {
         if child.kind() == SyntaxKind::PROPERTY_DRAWER {
-            for tok in child.children_with_tokens().collect::<Vec<_>>().into_iter().rev() {
+            for tok in child
+                .children_with_tokens()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
                 if let orgize::rowan::NodeOrToken::Token(t) = tok {
                     if t.kind() == SyntaxKind::BLANK_LINE {
                         pre_blank_count += 1;
@@ -204,64 +211,63 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
     }
 
     let (section_leading_blanks, section_trailing_blanks, body, body_spacing) =
-        if let Some(section) = hl.section()
-    {
-        let section_children: Vec<_> = section.syntax().children().collect();
+        if let Some(section) = hl.section() {
+            let section_children: Vec<_> = section.syntax().children().collect();
 
-        // Source 2: leading empty paragraphs in the section
-        let mut leading = 0u32;
-        for child in &section_children {
-            if is_blank_paragraph(child) {
-                leading += 1;
-            } else {
-                break;
-            }
-        }
-
-        // Trailing blank lines in the section come from two sources:
-        //
-        // A) Separate empty PARAGRAPH nodes (containing only BLANK_LINE
-        //    tokens) at the end of the section.
-        // B) Trailing BLANK_LINE tokens inside the last real PARAGRAPH
-        //    (orgize sometimes folds blank lines into the preceding
-        //    paragraph rather than creating a separate node).
-        let mut trailing = 0u32;
-
-        // Source A: trailing empty paragraphs
-        for child in section_children.iter().rev() {
-            if is_blank_paragraph(child) {
-                trailing += 1;
-            } else {
-                break;
-            }
-        }
-
-        // If the section only has blank paragraphs, they are ALL leading
-        // (pre_body_blank); don't double-count them as trailing.
-        // This check only applies to Source A (separate blank paragraph
-        // nodes), not Source B below.
-        let total = section_children.len() as u32;
-        if leading + trailing >= total {
-            trailing = 0;
-        }
-
-        // Source B: trailing BLANK_LINE tokens in the last non-blank child.
-        // These are tokens INSIDE a real element (paragraph or list),
-        // representing a different blank line than the leading blank paragraph
-        // nodes counted above.
-        if trailing == 0 {
-            if let Some(last) = section_children.last() {
-                if !is_blank_paragraph(last) {
-                    trailing = count_trailing_blank_lines(last);
+            // Source 2: leading empty paragraphs in the section
+            let mut leading = 0u32;
+            for child in &section_children {
+                if is_blank_paragraph(child) {
+                    leading += 1;
+                } else {
+                    break;
                 }
             }
-        }
 
-        let (elements, body_spacing) = convert_section_elements(&section);
-        (leading, trailing, elements, body_spacing)
-    } else {
-        (0, 0, vec![], vec![])
-    };
+            // Trailing blank lines in the section come from two sources:
+            //
+            // A) Separate empty PARAGRAPH nodes (containing only BLANK_LINE
+            //    tokens) at the end of the section.
+            // B) Trailing BLANK_LINE tokens inside the last real PARAGRAPH
+            //    (orgize sometimes folds blank lines into the preceding
+            //    paragraph rather than creating a separate node).
+            let mut trailing = 0u32;
+
+            // Source A: trailing empty paragraphs
+            for child in section_children.iter().rev() {
+                if is_blank_paragraph(child) {
+                    trailing += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // If the section only has blank paragraphs, they are ALL leading
+            // (pre_body_blank); don't double-count them as trailing.
+            // This check only applies to Source A (separate blank paragraph
+            // nodes), not Source B below.
+            let total = section_children.len() as u32;
+            if leading + trailing >= total {
+                trailing = 0;
+            }
+
+            // Source B: trailing BLANK_LINE tokens in the last non-blank child.
+            // These are tokens INSIDE a real element (paragraph or list),
+            // representing a different blank line than the leading blank paragraph
+            // nodes counted above.
+            if trailing == 0 {
+                if let Some(last) = section_children.last() {
+                    if !is_blank_paragraph(last) {
+                        trailing = count_trailing_blank_lines(last);
+                    }
+                }
+            }
+
+            let (elements, body_spacing) = convert_section_elements(&section);
+            (leading, trailing, elements, body_spacing)
+        } else {
+            (0, 0, vec![], vec![])
+        };
 
     let child_headlines: Vec<_> = hl.headlines().collect();
     let child_count = child_headlines.len();
@@ -278,8 +284,7 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
             // already-tracked blanks to isolate the inter-sibling part.
             if !is_last {
                 let text = child.syntax().to_string();
-                let trailing_newlines =
-                    text.bytes().rev().take_while(|&b| b == b'\n').count();
+                let trailing_newlines = text.bytes().rev().take_while(|&b| b == b'\n').count();
                 let mut blank_count = if trailing_newlines > 1 {
                     (trailing_newlines - 1) as u32
                 } else {
@@ -341,13 +346,12 @@ fn convert_headline(hl: &Headline, is_entry_level: bool) -> Heading {
     // blanks are inter-entry spacing already captured by the entry-level
     // post_blank — don't double-count them.  For all other cases (child
     // headings, or entry-level headings with children), track them.
-    let post_body_blank = if section_trailing_blanks > 0
-        && (!is_entry_level || !children.is_empty())
-    {
-        Some(section_trailing_blanks)
-    } else {
-        None
-    };
+    let post_body_blank =
+        if section_trailing_blanks > 0 && (!is_entry_level || !children.is_empty()) {
+            Some(section_trailing_blanks)
+        } else {
+            None
+        };
 
     Heading {
         level,
@@ -581,7 +585,11 @@ fn convert_block_element(node: &orgize::SyntaxNode) -> Option<Element> {
     if Rule::cast(node.clone()).is_some() {
         let raw = node.to_string();
         let trimmed = raw.trim();
-        let dash_count = if trimmed.len() != 5 { Some(trimmed.len()) } else { None };
+        let dash_count = if trimmed.len() != 5 {
+            Some(trimmed.len())
+        } else {
+            None
+        };
         return Some(Element::HorizontalRule { dash_count });
     }
 
@@ -774,12 +782,19 @@ fn convert_list_item(item: &OrgListItem, is_descriptive: bool) -> ListItem {
             // Detect original spacing around `::` from raw item text.
             // If raw text has ` :: ` (with spaces), preserve that form.
             let raw_text = item.syntax().to_string();
-            let separator = if raw_text.contains(" :: ") { " :: " } else { "::" };
+            let separator = if raw_text.contains(" :: ") {
+                " :: "
+            } else {
+                "::"
+            };
             tag_contents.push(InlineContent::Text {
                 value: separator.to_string(),
             });
             // Prepend tag contents to the first paragraph
-            if let Some(Element::Paragraph { contents: ref mut para }) = contents.first_mut() {
+            if let Some(Element::Paragraph {
+                contents: ref mut para,
+            }) = contents.first_mut()
+            {
                 tag_contents.append(para);
                 *para = tag_contents;
             } else if !contents.is_empty() {
@@ -813,7 +828,12 @@ fn convert_list_item(item: &OrgListItem, is_descriptive: bool) -> ListItem {
 /// Count trailing BLANK_LINE tokens inside a syntax node (typically a paragraph).
 fn count_trailing_blank_lines(node: &orgize::SyntaxNode) -> u32 {
     let mut count = 0u32;
-    for item in node.children_with_tokens().collect::<Vec<_>>().into_iter().rev() {
+    for item in node
+        .children_with_tokens()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         match item {
             orgize::rowan::NodeOrToken::Token(t) => {
                 if t.kind() == SyntaxKind::BLANK_LINE {
@@ -915,7 +935,10 @@ fn strip_list_item_indentation(el: Element, body_indent: usize) -> Element {
 
 /// Strip leading whitespace from the first Text element in a list of
 /// inline content, and from Text elements that follow LineBreak elements.
-fn strip_leading_whitespace(mut contents: Vec<InlineContent>, body_indent: usize) -> Vec<InlineContent> {
+fn strip_leading_whitespace(
+    mut contents: Vec<InlineContent>,
+    body_indent: usize,
+) -> Vec<InlineContent> {
     // Strip leading whitespace from first element
     if let Some(InlineContent::Text { value }) = contents.first_mut() {
         *value = value.trim_start().to_string();
@@ -1494,13 +1517,19 @@ fn convert_inline_node(node: &orgize::SyntaxNode) -> Option<InlineContent> {
     // Subscript
     if let Some(sub) = Subscript::cast(node.clone()) {
         let (contents, has_braces) = convert_subscript_children(sub.syntax());
-        return Some(InlineContent::Subscript { contents, use_braces: has_braces });
+        return Some(InlineContent::Subscript {
+            contents,
+            use_braces: has_braces,
+        });
     }
 
     // Superscript
     if let Some(sup) = Superscript::cast(node.clone()) {
         let (contents, has_braces) = convert_subscript_children(sup.syntax());
-        return Some(InlineContent::Superscript { contents, use_braces: has_braces });
+        return Some(InlineContent::Superscript {
+            contents,
+            use_braces: has_braces,
+        });
     }
 
     // For any inline node kind we do not handle, fall back to raw text.
@@ -1928,7 +1957,11 @@ mod tests {
         let entries = org_to_entries(input);
         // The first entry should be a Section containing the property drawer
         // (as a Raw element) followed by the TITLE keyword.
-        assert!(entries.len() >= 2, "expected at least 2 entries, got {}", entries.len());
+        assert!(
+            entries.len() >= 2,
+            "expected at least 2 entries, got {}",
+            entries.len()
+        );
         match &entries[0].content {
             EntryContent::Section { elements, .. } => {
                 assert!(
@@ -2004,7 +2037,11 @@ mod tests {
                 let fndef = elements
                     .iter()
                     .find(|e| matches!(e, Element::FootnoteDefinition { .. }));
-                assert!(fndef.is_some(), "expected FootnoteDefinition in {:?}", elements);
+                assert!(
+                    fndef.is_some(),
+                    "expected FootnoteDefinition in {:?}",
+                    elements
+                );
                 match fndef.unwrap() {
                     Element::FootnoteDefinition { label, elements } => {
                         assert_eq!(label, "1");
@@ -2026,7 +2063,11 @@ mod tests {
                 let latex = elements
                     .iter()
                     .find(|e| matches!(e, Element::LatexEnvironment { .. }));
-                assert!(latex.is_some(), "expected LatexEnvironment in {:?}", elements);
+                assert!(
+                    latex.is_some(),
+                    "expected LatexEnvironment in {:?}",
+                    elements
+                );
             }
             _ => panic!("expected Section"),
         }
@@ -2128,7 +2169,10 @@ mod tests {
             EntryContent::Section { elements, .. } => match &elements[0] {
                 Element::PlainList { kind, items } => {
                     assert_eq!(*kind, ListKind::Descriptive);
-                    assert!(items[0].tag.is_some(), "expected tag in descriptive list item");
+                    assert!(
+                        items[0].tag.is_some(),
+                        "expected tag in descriptive list item"
+                    );
                 }
                 other => panic!("expected PlainList, got {:?}", other),
             },
@@ -2154,7 +2198,7 @@ mod tests {
     #[test]
     fn comma_escaping_behavior() {
         let input = "#+begin_example\n,* Not a heading\n,#+not a keyword\n#+end_example\n";
-        let org = orgize::Org::parse(input);
+        let _org = orgize::Org::parse(input);
         let entries = org_to_entries(input);
         if let Some(entry) = entries.first() {
             if let EntryContent::Section { elements, .. } = &entry.content {

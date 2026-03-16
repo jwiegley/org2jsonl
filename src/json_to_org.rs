@@ -404,7 +404,7 @@ fn write_element(buf: &mut String, element: &Element, indent: usize) {
             for line in value.lines() {
                 buf.push_str(&prefix);
                 if line.is_empty() {
-                    buf.push_str("#");
+                    buf.push('#');
                 } else {
                     buf.push_str("# ");
                     buf.push_str(line);
@@ -798,10 +798,11 @@ fn detect_column_alignments(rows: &[TableRow]) -> Vec<ColumnAlignment> {
     for row in rows {
         if let TableRowKind::Standard { cells } = &row.kind {
             // Check if this is an alignment-cookie row: all non-empty cells match <r>, <l>, or <c>
-            let is_alignment_row = !cells.is_empty() && cells.iter().all(|cell| {
-                let text = inline_to_string(cell).trim().to_string();
-                text.is_empty() || text == "<r>" || text == "<l>" || text == "<c>"
-            });
+            let is_alignment_row = !cells.is_empty()
+                && cells.iter().all(|cell| {
+                    let text = inline_to_string(cell).trim().to_string();
+                    text.is_empty() || text == "<r>" || text == "<l>" || text == "<c>"
+                });
             if is_alignment_row {
                 // Expand alignments vector if needed
                 while alignments.len() < cells.len() {
@@ -929,7 +930,11 @@ fn row_effective_widths(row: &TableRow) -> Vec<usize> {
             .iter()
             .map(|c| {
                 let w = inline_to_string(c).len();
-                if w == 0 { 1 } else { w }
+                if w == 0 {
+                    1
+                } else {
+                    w
+                }
             })
             .collect()
     } else {
@@ -1059,7 +1064,10 @@ fn write_inline_content(buf: &mut String, content: &InlineContent) {
         InlineContent::StatisticsCookie { value } => {
             buf.push_str(value);
         }
-        InlineContent::Subscript { contents, use_braces } => {
+        InlineContent::Subscript {
+            contents,
+            use_braces,
+        } => {
             if *use_braces {
                 buf.push_str("_{");
                 write_inline(buf, contents);
@@ -1069,7 +1077,10 @@ fn write_inline_content(buf: &mut String, content: &InlineContent) {
                 write_inline(buf, contents);
             }
         }
-        InlineContent::Superscript { contents, use_braces } => {
+        InlineContent::Superscript {
+            contents,
+            use_braces,
+        } => {
             if *use_braces {
                 buf.push_str("^{");
                 write_inline(buf, contents);
@@ -1682,7 +1693,7 @@ Description of the task.
                     value: "1:00".into(),
                 }],
                 pre_body_blank: None,
-            body_spacing: vec![],
+                body_spacing: vec![],
                 body: vec![Element::PlainList {
                     kind: ListKind::Unordered,
                     items: vec![
@@ -1695,7 +1706,7 @@ Description of the task.
                                 contents: vec![text("Milk")],
                             }],
                             content_spacing: vec![],
-                post_blank: None,
+                            post_blank: None,
                         },
                         ListItem {
                             bullet: "-".into(),
@@ -1706,7 +1717,7 @@ Description of the task.
                                 contents: vec![text("Eggs")],
                             }],
                             content_spacing: vec![],
-                post_blank: None,
+                            post_blank: None,
                         },
                     ],
                 }],
@@ -1903,7 +1914,10 @@ Description of the task.
 
     #[test]
     fn empty_section() {
-        let e = entry(EntryContent::Section { elements: vec![], body_spacing: vec![] });
+        let e = entry(EntryContent::Section {
+            elements: vec![],
+            body_spacing: vec![],
+        });
         // An empty section should produce just a trailing newline.
         assert_eq!(entry_to_org(&e), "\n");
     }
@@ -1964,9 +1978,7 @@ Description of the task.
 
     #[test]
     fn empty_comment_value() {
-        let elem = Element::Comment {
-            value: "".into(),
-        };
+        let elem = Element::Comment { value: "".into() };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
             body_spacing: vec![],
@@ -1976,9 +1988,7 @@ Description of the task.
 
     #[test]
     fn empty_fixed_width_value() {
-        let elem = Element::FixedWidth {
-            value: "".into(),
-        };
+        let elem = Element::FixedWidth { value: "".into() };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
             body_spacing: vec![],
@@ -2002,9 +2012,7 @@ Description of the task.
 
     #[test]
     fn empty_latex_environment() {
-        let elem = Element::LatexEnvironment {
-            value: "".into(),
-        };
+        let elem = Element::LatexEnvironment { value: "".into() };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
             body_spacing: vec![],
@@ -2014,9 +2022,7 @@ Description of the task.
 
     #[test]
     fn empty_raw_element() {
-        let elem = Element::Raw {
-            value: "".into(),
-        };
+        let elem = Element::Raw { value: "".into() };
         let e = entry(EntryContent::Section {
             elements: vec![elem],
             body_spacing: vec![],
@@ -2070,7 +2076,10 @@ Description of the task.
             body_spacing: vec![],
         });
         let result = entry_to_org(&e);
-        assert!(result.starts_with("-\n"), "expected bullet on its own line, got: {result:?}");
+        assert!(
+            result.starts_with("-\n"),
+            "expected bullet on its own line, got: {result:?}"
+        );
         assert!(result.contains("#+begin_src python"));
         assert!(result.contains("print(1)"));
         assert!(result.contains("#+end_src"));
@@ -2114,7 +2123,10 @@ Description of the task.
             body_spacing: vec![],
         });
         let result = entry_to_org(&e);
-        assert!(result.starts_with("[fn:2] First paragraph."), "got: {result:?}");
+        assert!(
+            result.starts_with("[fn:2] First paragraph."),
+            "got: {result:?}"
+        );
         assert!(result.contains("Second paragraph."));
     }
 

@@ -133,13 +133,11 @@ pub enum Element {
     #[serde(rename = "drawer")]
     Drawer { name: String, value: String },
     #[serde(rename = "table")]
-    Table {
-        rows: Vec<TableRow>,
-    },
+    Table { rows: Vec<TableRow> },
     #[serde(rename = "horizontal_rule")]
     HorizontalRule {
         #[serde(skip_serializing_if = "Option::is_none")]
-        dash_count: Option<usize>
+        dash_count: Option<usize>,
     },
     #[serde(rename = "keyword")]
     Keyword { key: String, value: String },
