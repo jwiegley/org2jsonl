@@ -7,7 +7,7 @@
 //!   - First round-trip may normalize formatting
 //!   - Second round-trip MUST be identical to the first (idempotency)
 
-use org2jsonl::json_to_org::entries_to_org;
+use org2jsonl::json_to_org::{entries_to_org, inject_file_properties};
 use org2jsonl::model::{EntryContent, Heading, InlineContent, OrgEntry};
 use org2jsonl::org_to_json::{org_to_entries, org_to_entries_with_source};
 use org2jsonl::SCHEMA_VERSION;
@@ -1800,4 +1800,71 @@ fn location_line_end_of_last_entry() {
     let last = entries.last().unwrap();
     let total_lines = input.lines().count();
     assert_eq!(last.line_end, Some(total_lines));
+}
+
+// =========================================================================
+// inject_file_properties tests
+// =========================================================================
+
+#[test]
+fn inject_file_properties_adds_file_when_multiple_files() {
+    let input1 = "* Heading A\n\nBody A.\n";
+    let input2 = "* Heading B\n\nBody B.\n";
+    let entries1 = org_to_entries_with_source(input1, Some("a.org"));
+    let entries2 = org_to_entries_with_source(input2, Some("b.org"));
+
+    let mut all_entries: Vec<OrgEntry> = Vec::new();
+    all_entries.extend(entries1);
+    all_entries.extend(entries2);
+
+    let modified = inject_file_properties(all_entries);
+    let org = entries_to_org(&modified);
+    assert!(
+        org.contains(":FILE:") && org.contains("a.org"),
+        "should contain FILE property for a.org"
+    );
+    assert!(
+        org.contains(":FILE:") && org.contains("b.org"),
+        "should contain FILE property for b.org"
+    );
+}
+
+#[test]
+fn inject_file_properties_omits_when_all_same_file() {
+    let input = "* Heading A\n\n* Heading B\n";
+    let entries = org_to_entries_with_source(input, Some("same.org"));
+
+    let modified = inject_file_properties(entries);
+    let org = entries_to_org(&modified);
+    assert!(
+        !org.contains(":FILE:"),
+        "should not contain FILE property when all same file"
+    );
+}
+
+#[test]
+fn inject_file_properties_handles_sections_gracefully() {
+    let input1 = "#+TITLE: A\n\n* Heading A\n";
+    let input2 = "#+TITLE: B\n\n* Heading B\n";
+    let entries1 = org_to_entries_with_source(input1, Some("a.org"));
+    let entries2 = org_to_entries_with_source(input2, Some("b.org"));
+
+    let mut all_entries: Vec<OrgEntry> = Vec::new();
+    all_entries.extend(entries1);
+    all_entries.extend(entries2);
+
+    let modified = inject_file_properties(all_entries);
+    let org = entries_to_org(&modified);
+    assert!(org.contains(":FILE:") && org.contains("a.org"));
+    assert!(org.contains(":FILE:") && org.contains("b.org"));
+    assert!(org.contains("#+TITLE:"));
+}
+
+#[test]
+fn inject_file_properties_no_file_fields() {
+    let input = "* Heading\n";
+    let entries = org_to_entries(input);
+    let original = entries.clone();
+    let modified = inject_file_properties(entries);
+    assert_eq!(original, modified);
 }

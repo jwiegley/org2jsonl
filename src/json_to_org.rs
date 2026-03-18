@@ -10,6 +10,8 @@
 //!   when present)
 //! * UTF-8, LF line endings, file ends with at least one newline
 
+use std::collections::HashSet;
+
 use crate::model::{
     CheckboxState, Element, EntryContent, Heading, InlineContent, ListItem, OrgEntry, Planning,
     Property, TableRow, TableRowKind,
@@ -44,6 +46,37 @@ pub fn entries_to_org(entries: &[OrgEntry]) -> String {
     }
     ensure_final_newline(&mut buf);
     buf
+}
+
+/// Inject `:FILE:` properties into heading entries when they come from
+/// multiple distinct source files.
+///
+/// If all entries reference the same file (or no entries have a `file` field),
+/// returns the entries unchanged. Otherwise, each heading entry with a `file`
+/// field gets a `:FILE:` property inserted at the beginning of its property
+/// drawer. Section entries are left unchanged (they lack property drawers).
+pub fn inject_file_properties(mut entries: Vec<OrgEntry>) -> Vec<OrgEntry> {
+    let distinct_files: HashSet<&str> = entries.iter().filter_map(|e| e.file.as_deref()).collect();
+
+    if distinct_files.len() <= 1 {
+        return entries;
+    }
+
+    for entry in &mut entries {
+        if let Some(ref file) = entry.file {
+            if let EntryContent::Heading(ref mut heading) = entry.content {
+                heading.properties.insert(
+                    0,
+                    Property {
+                        key: "FILE".to_string(),
+                        value: file.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    entries
 }
 
 /// Render a single [`OrgEntry`] into canonical Org-mode text.
