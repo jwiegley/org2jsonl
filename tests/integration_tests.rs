@@ -9,7 +9,7 @@
 
 use org2jsonl::json_to_org::entries_to_org;
 use org2jsonl::model::{EntryContent, Heading, InlineContent, OrgEntry};
-use org2jsonl::org_to_json::org_to_entries;
+use org2jsonl::org_to_json::{org_to_entries, org_to_entries_with_source};
 use org2jsonl::SCHEMA_VERSION;
 
 // Import pretty_assertions::assert_eq only where used explicitly.
@@ -1708,4 +1708,96 @@ fn location_fields_omitted_when_none() {
     assert!(parsed.get("char_end").is_none());
     assert!(parsed.get("line_begin").is_none());
     assert!(parsed.get("line_end").is_none());
+}
+
+// =========================================================================
+// org_to_entries_with_source tests
+// =========================================================================
+
+#[test]
+fn entries_with_source_have_file_field() {
+    let input = "* Heading\n\nBody.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].file.as_deref(), Some("test.org"));
+}
+
+#[test]
+fn entries_with_source_have_correct_line_numbers() {
+    let input = "* First\n\nBody.\n\n* Second\n\nMore body.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].line_begin, Some(1));
+    assert_eq!(entries[1].line_begin, Some(5));
+}
+
+#[test]
+fn entries_with_source_have_correct_line_end() {
+    let input = "* First\n\nBody.\n\n* Second\n\nMore body.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].line_end, Some(4));
+    assert_eq!(entries[1].line_end, Some(7));
+}
+
+#[test]
+fn entries_with_source_have_correct_char_offsets() {
+    let input = "* First\n\nBody.\n\n* Second\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].char_begin, Some(0));
+    assert_eq!(entries[0].char_end, entries[1].char_begin);
+}
+
+#[test]
+fn entries_without_source_have_no_location() {
+    let input = "* Heading\n";
+    let entries = org_to_entries(input);
+    assert!(entries[0].file.is_none());
+    assert!(entries[0].char_begin.is_none());
+}
+
+#[test]
+fn entries_with_source_section_and_heading() {
+    let input = "#+TITLE: Test\n\n* Heading\n\nBody.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].char_begin, Some(0));
+    assert_eq!(entries[0].line_begin, Some(1));
+    assert!(entries[1].char_begin.unwrap() > 0);
+    assert_eq!(entries[1].file.as_deref(), Some("test.org"));
+}
+
+#[test]
+fn entries_with_source_utf8_char_offsets() {
+    let input = "* Caf\u{00e9}\n\n* Second\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries.len(), 2);
+    let second_char_begin = entries[1].char_begin.unwrap();
+    let expected_char_begin = "* Caf\u{00e9}\n\n".chars().count();
+    assert_eq!(second_char_begin, expected_char_begin);
+}
+
+#[test]
+fn entries_with_source_empty_input() {
+    let entries = org_to_entries_with_source("", Some("empty.org"));
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn location_metadata_covers_full_file() {
+    let input = "#+TITLE: Test\n\n* H1\n\nBody 1.\n\n* H2\n\nBody 2.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    assert_eq!(entries[0].char_begin, Some(0));
+    let last = entries.last().unwrap();
+    assert_eq!(last.char_end, Some(input.chars().count()));
+}
+
+#[test]
+fn location_line_end_of_last_entry() {
+    let input = "* H1\n\nBody.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    let last = entries.last().unwrap();
+    let total_lines = input.lines().count();
+    assert_eq!(last.line_end, Some(total_lines));
 }

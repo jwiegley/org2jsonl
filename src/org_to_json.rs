@@ -23,6 +23,16 @@ use crate::model::{
 };
 use crate::SCHEMA_VERSION;
 
+/// Convert a byte offset to a 0-based character offset (Unicode scalar values).
+fn byte_to_char(input: &str, byte_offset: usize) -> usize {
+    input[..byte_offset].chars().count()
+}
+
+/// Convert a byte offset to a 1-based line number.
+fn byte_to_line(input: &str, byte_offset: usize) -> usize {
+    input[..byte_offset].bytes().filter(|&b| b == b'\n').count() + 1
+}
+
 /// Parse raw Org-mode text and return a list of [`OrgEntry`] values.
 ///
 /// Each top-level heading becomes a separate entry of type
@@ -30,7 +40,18 @@ use crate::SCHEMA_VERSION;
 /// "zeroth section") becomes an [`EntryContent::Section`].
 pub fn org_to_entries(input: &str) -> Vec<OrgEntry> {
     let org = Org::parse(input);
-    org_to_entries_from_parsed(org)
+    org_to_entries_from_parsed(org, input, None)
+}
+
+/// Parse Org-mode text and return entries with source location metadata.
+///
+/// When `file` is `Some`, each entry will have its `file`, `char_begin`,
+/// `char_end`, `line_begin`, and `line_end` fields populated.
+/// Character offsets are 0-based Unicode scalar value counts.
+/// Line numbers are 1-based.
+pub fn org_to_entries_with_source(input: &str, file: Option<&str>) -> Vec<OrgEntry> {
+    let org = Org::parse(input);
+    org_to_entries_from_parsed(org, input, file)
 }
 
 /// Parse Org-mode text with custom TODO keywords.
@@ -50,24 +71,32 @@ pub fn org_to_entries_with_keywords(
         ..Default::default()
     };
     let org = config.parse(input);
-    org_to_entries_from_parsed(org)
+    org_to_entries_from_parsed(org, input, None)
 }
 
-fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
+fn org_to_entries_from_parsed(org: Org, input: &str, file: Option<&str>) -> Vec<OrgEntry> {
     let doc = org.document();
     let mut entries = Vec::new();
     let mut raw_texts: Vec<String> = Vec::new();
+    let mut byte_ranges: Vec<(usize, usize)> = Vec::new();
 
     // Zeroth section: content before the first heading.
     if let Some(section) = doc.section() {
         let raw = section.syntax().to_string();
         let mut elements = Vec::new();
 
+        // Track byte range for the section
+        let section_range = section.syntax().text_range();
+        let mut byte_start = u32::from(section_range.start()) as usize;
+        let byte_end = u32::from(section_range.end()) as usize;
+
         // Check for file-level property drawer in document syntax (before section)
         // The property drawer may be a direct child of the Document node
         for child in doc.syntax().children() {
             if child.kind() == SyntaxKind::PROPERTY_DRAWER {
                 // Found a file-level property drawer
+                let pd_start = u32::from(child.text_range().start()) as usize;
+                byte_start = byte_start.min(pd_start);
                 elements.push(Element::Raw {
                     value: child.to_string(),
                 });
@@ -103,12 +132,16 @@ fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
                 post_blank: None,
             });
             raw_texts.push(raw);
+            byte_ranges.push((byte_start, byte_end));
         }
     }
 
     // Each top-level (level-1) heading becomes its own entry.
     for headline in doc.headlines() {
         let raw = headline.syntax().to_string();
+        let hl_range = headline.syntax().text_range();
+        let hl_byte_start = u32::from(hl_range.start()) as usize;
+        let hl_byte_end = u32::from(hl_range.end()) as usize;
         entries.push(OrgEntry {
             schema_version: SCHEMA_VERSION,
             file: None,
@@ -120,6 +153,7 @@ fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
             post_blank: None,
         });
         raw_texts.push(raw);
+        byte_ranges.push((hl_byte_start, hl_byte_end));
     }
 
     // Calculate post_blank from trailing newlines in each top-level structure's
@@ -168,6 +202,24 @@ fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
             // fall back to the default of 1 blank line when the actual
             // trailing blanks were already accounted for by child headings.
             entry.post_blank = Some(blank_count);
+        }
+    }
+
+    // Populate location metadata when a source file is provided.
+    if let Some(file_name) = file {
+        for (i, entry) in entries.iter_mut().enumerate() {
+            if i < byte_ranges.len() {
+                let (byte_start, byte_end) = byte_ranges[i];
+                entry.file = Some(file_name.to_string());
+                entry.char_begin = Some(byte_to_char(input, byte_start));
+                entry.char_end = Some(byte_to_char(input, byte_end));
+                entry.line_begin = Some(byte_to_line(input, byte_start));
+                entry.line_end = if byte_end > byte_start {
+                    Some(byte_to_line(input, byte_end - 1))
+                } else {
+                    Some(byte_to_line(input, byte_start))
+                };
+            }
         }
     }
 
