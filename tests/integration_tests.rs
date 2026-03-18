@@ -1868,3 +1868,57 @@ fn inject_file_properties_no_file_fields() {
     let modified = inject_file_properties(entries);
     assert_eq!(original, modified);
 }
+
+// =========================================================================
+// End-to-end multi-file integration tests
+// =========================================================================
+
+#[test]
+fn multi_file_round_trip_preserves_location_metadata() {
+    let input1 = "* Alpha\n\nAlpha body.\n";
+    let input2 = "* Beta\n\nBeta body.\n";
+
+    let entries1 = org_to_entries_with_source(input1, Some("alpha.org"));
+    let entries2 = org_to_entries_with_source(input2, Some("beta.org"));
+
+    // All entries have location metadata
+    for e in &entries1 {
+        assert!(e.file.is_some());
+        assert!(e.char_begin.is_some());
+        assert!(e.char_end.is_some());
+        assert!(e.line_begin.is_some());
+        assert!(e.line_end.is_some());
+    }
+    for e in &entries2 {
+        assert!(e.file.is_some());
+    }
+
+    // JSON round-trip preserves location metadata
+    let mut all = Vec::new();
+    all.extend(entries1);
+    all.extend(entries2);
+    let jsonl = entries_to_jsonl(&all);
+    let recovered = jsonl_to_entries(&jsonl);
+    assert_eq!(all.len(), recovered.len());
+    for (orig, rec) in all.iter().zip(recovered.iter()) {
+        assert_eq!(orig.file, rec.file);
+        assert_eq!(orig.char_begin, rec.char_begin);
+        assert_eq!(orig.char_end, rec.char_end);
+        assert_eq!(orig.line_begin, rec.line_begin);
+        assert_eq!(orig.line_end, rec.line_end);
+    }
+}
+
+#[test]
+fn roundtrip_with_location_fields_preserves_idempotency() {
+    let input = "* TODO [#A] Task :tag:\nSCHEDULED: <2024-01-15 Mon>\n:PROPERTIES:\n:ID: test\n:END:\n\nBody.\n";
+    let entries = org_to_entries_with_source(input, Some("test.org"));
+    let org = entries_to_org(&entries);
+    // entries_to_org should ignore location fields and produce valid org
+    let re_entries = org_to_entries(&org);
+    let org2 = entries_to_org(&re_entries);
+    assert_eq!(
+        org, org2,
+        "Idempotency should hold even with location fields"
+    );
+}
