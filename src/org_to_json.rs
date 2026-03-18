@@ -91,6 +91,11 @@ fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
         if !elements.is_empty() {
             entries.push(OrgEntry {
                 schema_version: SCHEMA_VERSION,
+                file: None,
+                char_begin: None,
+                char_end: None,
+                line_begin: None,
+                line_end: None,
                 content: EntryContent::Section {
                     elements,
                     body_spacing,
@@ -106,6 +111,11 @@ fn org_to_entries_from_parsed(org: Org) -> Vec<OrgEntry> {
         let raw = headline.syntax().to_string();
         entries.push(OrgEntry {
             schema_version: SCHEMA_VERSION,
+            file: None,
+            char_begin: None,
+            char_end: None,
+            line_begin: None,
+            line_end: None,
             content: EntryContent::Heading(Box::new(convert_headline(&headline, true))),
             post_blank: None,
         });

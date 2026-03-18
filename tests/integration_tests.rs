@@ -8,7 +8,7 @@
 //!   - Second round-trip MUST be identical to the first (idempotency)
 
 use org2jsonl::json_to_org::entries_to_org;
-use org2jsonl::model::OrgEntry;
+use org2jsonl::model::{EntryContent, Heading, InlineContent, OrgEntry};
 use org2jsonl::org_to_json::org_to_entries;
 use org2jsonl::SCHEMA_VERSION;
 
@@ -1630,4 +1630,82 @@ fn entry_count_matches_top_level_structure() {
 ";
     let entries2 = org_to_entries(input2);
     assert_eq!(entries2.len(), 1);
+}
+
+// =========================================================================
+// 7. Location field serialization tests
+// =========================================================================
+
+#[test]
+fn location_fields_serialize_when_present() {
+    let entry = OrgEntry {
+        schema_version: SCHEMA_VERSION,
+        file: Some("test.org".to_string()),
+        char_begin: Some(0),
+        char_end: Some(42),
+        line_begin: Some(1),
+        line_end: Some(3),
+        content: EntryContent::Heading(Box::new(Heading {
+            level: 1,
+            keyword: None,
+            priority: None,
+            title: vec![InlineContent::Text {
+                value: "Test".to_string(),
+            }],
+            tags: vec![],
+            planning: None,
+            properties: vec![],
+            pre_body_blank: None,
+            body: vec![],
+            body_spacing: vec![],
+            post_body_blank: None,
+            children: vec![],
+            post_blank: None,
+        })),
+        post_blank: None,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["file"], "test.org");
+    assert_eq!(parsed["char_begin"], 0);
+    assert_eq!(parsed["char_end"], 42);
+    assert_eq!(parsed["line_begin"], 1);
+    assert_eq!(parsed["line_end"], 3);
+}
+
+#[test]
+fn location_fields_omitted_when_none() {
+    let entry = OrgEntry {
+        schema_version: SCHEMA_VERSION,
+        file: None,
+        char_begin: None,
+        char_end: None,
+        line_begin: None,
+        line_end: None,
+        content: EntryContent::Heading(Box::new(Heading {
+            level: 1,
+            keyword: None,
+            priority: None,
+            title: vec![InlineContent::Text {
+                value: "Test".to_string(),
+            }],
+            tags: vec![],
+            planning: None,
+            properties: vec![],
+            pre_body_blank: None,
+            body: vec![],
+            body_spacing: vec![],
+            post_body_blank: None,
+            children: vec![],
+            post_blank: None,
+        })),
+        post_blank: None,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(parsed.get("file").is_none());
+    assert!(parsed.get("char_begin").is_none());
+    assert!(parsed.get("char_end").is_none());
+    assert!(parsed.get("line_begin").is_none());
+    assert!(parsed.get("line_end").is_none());
 }

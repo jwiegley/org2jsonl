@@ -1151,6 +1151,11 @@ mod tests {
     fn entry(content: EntryContent) -> OrgEntry {
         OrgEntry {
             schema_version: SCHEMA_VERSION,
+            file: None,
+            char_begin: None,
+            char_end: None,
+            line_begin: None,
+            line_end: None,
             content,
             post_blank: None,
         }

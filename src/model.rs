@@ -10,6 +10,21 @@ fn is_false(v: &bool) -> bool {
 pub struct OrgEntry {
     /// Schema version for forward compatibility
     pub schema_version: u32,
+    /// Source file path (set when processing named files)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Starting character offset (0-based, Unicode scalar values) within the source file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub char_begin: Option<usize>,
+    /// Ending character offset (0-based, exclusive) within the source file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub char_end: Option<usize>,
+    /// Starting line number (1-based) within the source file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_begin: Option<usize>,
+    /// Ending line number (1-based, inclusive) within the source file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<usize>,
     /// The type of this entry
     #[serde(flatten)]
     pub content: EntryContent,
